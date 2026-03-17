@@ -57,6 +57,29 @@
   (recentf-mode t)
   (use-short-answers nil))
 
+;; Keybindings in Terminal Emacs
+(use-package emacs
+  :bind  (("M-%" . #'query-replace-regexp)
+          ;; C-S-<backspace> . #'kill-whole-line
+          ;; C-x C-+ #'text-scale-adjust
+          ;; C-x C-- #'text-scale-adjust
+          ;; C-x C-0 #'text-scale-adjust
+          ;; C-x C-; #'comment-line
+          ;; C-x C-= #'text-scale-adjust
+          ;; C-M-S-l #'recenter-other-window
+          ;; C-M-S-v #'scroll-other-window-down
+          ;; C-M-% #'query-replace-regexp
+          ;; C-h C-\ #'describe-input-method
+          ;; C-\ #'toggle-input-method
+          ;; C-? undo-redo
+          ;; C-M-_ undo-redo
+          ;; C-x RET C-\ #'set-input-method
+          ;; C-x C-M-+ #'global-text-scale-adjust
+          ;; C-x C-M-- #'global-text-scale-adjust
+          ;; C-x C-M-0 #'global-text-scale-adjust
+          ;; C-x C-M-= #'global-text-scale-adjust
+          ))
+
 ;; Scrolling
 (use-package emacs
   :custom
@@ -128,38 +151,38 @@
   :hook (after-init . mason-ensure))
 
 ;; Autocompletion
-(use-package yasnippet
-  :hook (prog-mode . yas-minor-mode))
+;; (use-package yasnippet
+;;   :hook (prog-mode . yas-minor-mode))
 
-(use-package yasnippet-snippets :defer)
+;; (use-package yasnippet-snippets :defer)
 
-(defun start/corfu-yas-tab-handler ()
-  "Prioritize corfu over yasnippet when yasnippet is active"
-  (interactive)
-  (if (> corfu--index -1)
-      (corfu-complete)
-    (yas-next-field-or-maybe-expand)
-    ))
+;; (defun start/corfu-yas-tab-handler ()
+;;   "Prioritize corfu over yasnippet when yasnippet is active"
+;;   (interactive)
+;;   (if (> corfu--index -1)
+;;       (corfu-complete)
+;;     (yas-next-field-or-maybe-expand)
+;;     ))
 
-(use-package snippy
-  :vc (:url "https://github.com/MiniApollo/snippy.git"
-            :branch "main"
-            :rev :newest)
-  :hook (after-init . global-snippy-minor-mode)
-  :custom
-  (snippy-global-languages '("global")) ;; Recomended
-  ;; Optional
-  ;; (snippy-install-dir (expand-file-name <Your location>))
-  ;; Use different snippet collections
-  ;; (snippy-source '("Your git repo" . "my-snippets-dir"))
-  :config
-  (snippy-install-or-update-snippets))
+;; (use-package snippy
+;;   :vc (:url "https://github.com/MiniApollo/snippy.git"
+;;             :branch "main"
+;;             :rev :newest)
+;;   :hook (after-init . global-snippy-minor-mode)
+;;   :custom
+;;   (snippy-global-languages '("global")) ;; Recomended
+;;   ;; Optional
+;;   ;; (snippy-install-dir (expand-file-name <Your location>))
+;;   ;; Use different snippet collections
+;;   ;; (snippy-source '("Your git repo" . "my-snippets-dir"))
+;;   :config
+;;   (snippy-install-or-update-snippets))
 
-(use-package emacs
-  :after (yasnippet corfu)
-  :bind
-  (:map yas-keymap
-        ("TAB" . start/corfu-yas-tab-handler)))
+;; (use-package emacs
+;;   :after (yasnippet corfu)
+;;   :bind
+;;   (:map yas-keymap
+;;         ("TAB" . start/corfu-yas-tab-handler)))
 
 (use-package corfu
   ;; Optional customizations
@@ -193,69 +216,69 @@
   :init
   (global-corfu-mode))
 
-(use-package nerd-icons-corfu
-  :after corfu
-  :init (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
+;; (use-package nerd-icons-corfu
+;;   :after corfu
+;;   :init (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
 
-(use-package yasnippet-capf :defer)
+;; (use-package yasnippet-capf :defer)
 
-(defun start/setup-capfs ()
-  "Configure completion backends"
-  ;; Take care when adding Capfs to the list since each of the Capfs adds a small runtime cost.
-  (let ((merge-backends (list
-                         #'cape-keyword      ;; Keyword completion
-                         ;; #'cape-abbrev       ;; Complete abbreviation
-                         #'cape-dabbrev      ;; Complete word from current buffers
-                         ;; #'cape-line         ;; Complete entire line from current buffer
-                         ;; #'cape-history      ;; Complete from Eshell, Comint or minibuffer history
-                         ;; #'cape-dict         ;; Dictionary completion (Needs Dictionary file installed)
-                         ;; #'cape-tex          ;; Complete Unicode char from TeX command, e.g. \hbar
-                         ;; #'cape-sgml         ;; Complete Unicode char from SGML entity, e.g., &alpha
-                         ;; #'cape-rfc1345      ;; Complete Unicode char using RFC 1345 mnemonics
-                         ;; #'snippy-capf       ;; Vscode Snippets (Snippy needs to be installed)
-                         #'yasnippet-capf    ;; Yasnippet snippets
-                         ))
-        (seperate-backends (list
-                            #'cape-file ;; Path completion
-                            #'cape-elisp-block ;; Complete elisp in Org or Markdown mode
-                            )))
-    ;; Remove keyword completion in git commits
-    (when (derived-mode-p 'git-commit-mode)
-      (setq merge-backends (remq #'cape-keyword merge-backends)))
+;; (defun start/setup-capfs ()
+;;   "Configure completion backends"
+;;   ;; Take care when adding Capfs to the list since each of the Capfs adds a small runtime cost.
+;;   (let ((merge-backends (list
+;;                          #'cape-keyword      ;; Keyword completion
+;;                          ;; #'cape-abbrev       ;; Complete abbreviation
+;;                          #'cape-dabbrev      ;; Complete word from current buffers
+;;                          ;; #'cape-line         ;; Complete entire line from current buffer
+;;                          ;; #'cape-history      ;; Complete from Eshell, Comint or minibuffer history
+;;                          ;; #'cape-dict         ;; Dictionary completion (Needs Dictionary file installed)
+;;                          ;; #'cape-tex          ;; Complete Unicode char from TeX command, e.g. \hbar
+;;                          ;; #'cape-sgml         ;; Complete Unicode char from SGML entity, e.g., &alpha
+;;                          ;; #'cape-rfc1345      ;; Complete Unicode char using RFC 1345 mnemonics
+;;                          ;; #'snippy-capf       ;; Vscode Snippets (Snippy needs to be installed)
+;;                          #'yasnippet-capf    ;; Yasnippet snippets
+;;                          ))
+;;         (seperate-backends (list
+;;                             #'cape-file ;; Path completion
+;;                             #'cape-elisp-block ;; Complete elisp in Org or Markdown mode
+;;                             )))
+;;     ;; Remove keyword completion in git commits
+;;     (when (derived-mode-p 'git-commit-mode)
+;;       (setq merge-backends (remq #'cape-keyword merge-backends)))
 
-    ;; Add Elisp symbols only in Elisp modes
-    (when (derived-mode-p 'emacs-lisp-mode 'ielm-mode)
-      (setq merge-backends (cons #'cape-elisp-symbol merge-backends))) ;; Emacs Lisp code (functions, variables)
+;;     ;; Add Elisp symbols only in Elisp modes
+;;     (when (derived-mode-p 'emacs-lisp-mode 'ielm-mode)
+;;       (setq merge-backends (cons #'cape-elisp-symbol merge-backends))) ;; Emacs Lisp code (functions, variables)
 
-    ;; Add Eglot to the front of the list if it's active
-    (when (bound-and-true-p eglot--managed-mode)
-      (setq merge-backends (cons #'eglot-completion-at-point merge-backends)))
+;;     ;; Add Eglot to the front of the list if it's active
+;;     (when (bound-and-true-p eglot--managed-mode)
+;;       (setq merge-backends (cons #'eglot-completion-at-point merge-backends)))
 
-    ;; Create the super-capf and set it buffer-locally
-    (setq-local completion-at-point-functions
-                (append
-                 seperate-backends
-                 (list (apply #'cape-capf-super merge-backends)))
-                )))
+;;     ;; Create the super-capf and set it buffer-locally
+;;     (setq-local completion-at-point-functions
+;;                 (append
+;;                  seperate-backends
+;;                  (list (apply #'cape-capf-super merge-backends)))
+;;                 )))
 
-(use-package cape
-  :after (corfu)
-  :init
-  ;; Add to the global default value of `completion-at-point-functions' which is
-  ;; used by `completion-at-point'.  The order of the functions matters, the
-  ;; first function returning a result wins.  Note that the list of buffer-local
-  ;; completion functions takes precedence over the global list.
+;; (use-package cape
+;;   :after (corfu)
+;;   :init
+;;   ;; Add to the global default value of `completion-at-point-functions' which is
+;;   ;; used by `completion-at-point'.  The order of the functions matters, the
+;;   ;; first function returning a result wins.  Note that the list of buffer-local
+;;   ;; completion functions takes precedence over the global list.
 
-  ;; Seperate function needed, because we use setq-local (everything is replaced)
-  (add-hook 'eglot-managed-mode-hook #'start/setup-capfs)
-  (add-hook 'prog-mode-hook #'start/setup-capfs)
-  (add-hook 'text-mode-hook #'start/setup-capfs))
+;;   ;; Seperate function needed, because we use setq-local (everything is replaced)
+;;   (add-hook 'eglot-managed-mode-hook #'start/setup-capfs)
+;;   (add-hook 'prog-mode-hook #'start/setup-capfs)
+;;   (add-hook 'text-mode-hook #'start/setup-capfs))
 
-(use-package orderless
-  :defer
-  :custom
-  (completion-styles '(orderless basic))
-  (completion-category-overrides '((file (styles basic partial-completion)))))
+;; (use-package orderless
+;;   :defer
+;;   :custom
+;;   (completion-styles '(orderless basic))
+;;   (completion-category-overrides '((file (styles basic partial-completion)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; TREESITTER
@@ -263,18 +286,25 @@
 (use-package treesit
   :ensure nil
   :config
-  (add-to-list 'treesit-language-source-alist
-               '(elisp "https://github.com/Wilfred/tree-sitter-elisp") t)
-  (add-to-list 'treesit-language-source-alist
-               '(gdscript "https://github.com/PrestonKnopp/tree-sitter-gdscript") t)
-  (add-to-list 'treesit-language-source-alist
-               '(hyprlang "https://github.com/tree-sitter-grammars/tree-sitter-hyprlang") t)
-  (add-to-list 'treesit-language-source-alist
-               '(make "https://github.com/alemuller/tree-sitter-make") t)
-  (add-to-list 'treesit-language-source-alist
-               '(markdown "https://github.com/ikatyang/tree-sitter-markdown") t)
-  (add-to-list 'treesit-language-source-alist
-               '(vue "https://github.com/ikatyang/tree-sitter-vue") t)
+  (setq treesit-language-source-alist
+        '((css . ("https://github.com/tree-sitter/tree-sitter-css" "v0.23.2"))
+          (go . ("https://github.com/tree-sitter/tree-sitter-go" "v0.20.0"))
+          (html . ("https://github.com/tree-sitter/tree-sitter-html" "v0.20.1"))
+          (javascript . ("https://github.com/tree-sitter/tree-sitter-javascript" "v0.20.1" "src"))
+          (json . ("https://github.com/tree-sitter/tree-sitter-json" "v0.20.2"))
+          (markdown . ("https://github.com/ikatyang/tree-sitter-markdown" "v0.7.1"))
+          (python . ("https://github.com/tree-sitter/tree-sitter-python" "v0.23.6"))
+          (rust . ("https://github.com/tree-sitter/tree-sitter-rust" "v0.21.2"))
+          (toml . ("https://github.com/tree-sitter/tree-sitter-toml" "v0.5.1"))
+          (tsx . ("https://github.com/tree-sitter/tree-sitter-typescript" "v0.20.3" "tsx/src"))
+          (typescript . ("https://github.com/tree-sitter/tree-sitter-typescript" "v0.20.3" "typescript/src"))
+          (yaml . ("https://github.com/ikatyang/tree-sitter-yaml" "v0.5.0"))
+          (elisp . ("https://github.com/Wilfred/tree-sitter-elisp"))
+          (gdscript . ("https://github.com/PrestonKnopp/tree-sitter-gdscript"))
+          (hyprlang . ("https://github.com/tree-sitter-grammars/tree-sitter-hyprlang"))
+          (make . ("https://github.com/alemuller/tree-sitter-make"))
+          (markdown . ("https://github.com/ikatyang/tree-sitter-markdown"))
+          (vue . ("https://github.com/ikatyang/tree-sitter-vue"))))
 
   (defun start/install-treesit-grammars ()
     "Install missing treesitter grammars"
@@ -321,8 +351,7 @@
 (use-package vertico
   :hook (after-init . vertico-mode)
   :custom
-  (vertico-cycle t) ;; Enable cycling for `vertico-next/previous'
-  )
+  (vertico-cycle t))
 
 (use-package marginalia
   :after vertico
@@ -338,8 +367,9 @@
   (marginalia-mode . nerd-icons-completion-marginalia-setup))
 
 
-
-;; Org
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ORG
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun my/get-current-quarter-month-range ()
   (let* ((now (decode-time))
          (month (decoded-time-month now))
@@ -400,7 +430,7 @@
   :custom
   (org-edit-src-content-indentation 4)
   (org-agenda-files (mapcar (lambda (file) (concat org-directory file))
-                            '("Todos/")))
+                            '("dash.org" "mobile.org")))
   (org-agenda-show-future-repeats nil)
   (org-priority-highest ?A)
   (org-priority-lowest ?E)
@@ -412,14 +442,20 @@
   (org-agenda-skip-scheduled-if-deadline-is-shown 'not-today)
   (org-agenda-persistent-marks t)
   (org-agenda-prefer-last-repeat t)
-  (org-stuck-projects '("+PROJECT" ("TODO") nil ""))
-  (org-agenda-todo-ignore-deadlines 'near)
+  (org-stuck-projects '("+PROJECT" ("TODO") nil nil))
+  (org-agenda-todo-ignore-deadlines 'all)
   (org-agenda-todo-ignore-scheduled 'all)
+  (org-agenda-todo-ignore-timestamp 'all)
   (org-agenda-deadline-leaders '("DUE: " "DUE IN %d DAYS: " "OVERDUE BY %d DAYS: "))
   (org-agenda-scheduled-leaders '("TODAY: " "RESCHEDULE (-%d)"))
+  (org-agenda-sorting-strategy '((agenda time-up priority-up deadline-up scheduled-up urgency-up habit-down category-keep)
+                                 (todo urgency-down category-keep) (tags urgency-down category-keep)
+                                 (search category-keep)))
+
   (org-agenda-fontify-priorities t)
   (org-agenda-restore-windows-after-quit t)
   (org-agenda-window-setup 'current-window)
+  (org-agenda-dim-blocked-tasks 'invisible)
   (org-enforce-todo-dependencies t)
   (org-use-fast-todo-selection t)
   (org-agenda-prefix-format '((agenda . " %i %-20:c%?-12t% s") (todo . " %i %-20:c")
@@ -427,6 +463,7 @@
   (org-tag-alist
    '(("WAITING" . ?w)
      ("MAYBE" . ?m)
+     ("PROJECT" . ?j)
      (:startgrouptag)
      ("@context")
      (:grouptags)
@@ -439,28 +476,36 @@
      (:endgroup)))
 
   (org-capture-templates
-   `(("t" "Todo" entry (file ,(concat org-directory "Todos/inbox.org")) "* TODO %? " :prepend t)
-     ("a" "Appointment" entry (file+olp ,(concat org-directory "Todos/calendar.org") "Appointments") "*  %?  %^T" :prepend t)
-     ("m" "Meeting" entry (file+olp ,(concat org-directory "Todos/calendar.org") "Meetings") "* %? \n%^T")
-     ("b" "Birthday or Anniversary" entry (file+olp ,(concat org-directory "Todos/calendar.org") "Birthdays/Special Dates") "* %? \n%^T")
-     ("q" "Question or Idea" entry (file ,(concat org-directory "Notes/inbox.org")) "* %? \n%l")))
+   `(("t" "Todo" entry (file+olp ,(concat org-directory "dash.org") "Inbox") "* TODO %? " :prepend t)
+     ("a" "Appointment" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Appointments") "*  %?  %^T" :prepend t)
+     ("m" "Meeting" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Meetings") "* %? \n%^T")
+     ("b" "Birthday or Anniversary" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Birthdays/Special Dates") "* %? \n%^T")
+     ("q" "Question or Idea" entry (file+olp ,(concat org-directory "dash.org") "Inbox") "* %? \n%l")
+     ("l" "Log" entry (file+olp+datetree ,(concat org-directory "logbook.org")) "* %?")))
 
   (org-agenda-custom-commands
    '(("a" "Agenda"
-      ((agenda ""))
+      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
+       (tags-todo "+WAITING"))
       ((org-agenda-category-filter-preset '("-cleaning"))
        (org-agenda-span 1)))
      ("c" "Cleaning"
-      ((agenda ""))
-      ((org-agenda-category-filter-preset '("+cleaning"))))
+      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
+       (tags-todo "+WAITING"))
+      ((org-agenda-category-filter-preset '("+cleaning"))
+       (org-agenda-span 1)))
      ("w" "Work"
-      ((agenda ""))
-      ((org-agenda-category-filter-preset '("+clients" "+business"))))
+      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
+       (tags-todo "+WAITING"))
+      ((org-agenda-category-filter-preset '("+Clients" "+Business"))
+       (org-agenda-span 1)))
      ("p" "Personal"
-      ((agenda ""))
-      ((org-agenda-category-filter-preset '("-clients" "-business" "-cleaning"))))))
+      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
+       (tags-todo "+WAITING"))
+      ((org-agenda-category-filter-preset '("-Clients" "-Business" "-cleaning"))
+       (org-agenda-span 1)))))
 
-  (org-refile-targets '((org-agenda-files . (:maxlevel . 1))))
+  (org-refile-targets '((org-agenda-files . (:maxlevel . 2))))
   :config
   (let ((scale 1.015))
     (set-face-attribute 'org-level-1 nil :height (expt scale 8))
@@ -471,6 +516,49 @@
     (set-face-attribute 'org-level-6 nil :height (expt scale 3))
     (set-face-attribute 'org-level-7 nil :height (expt scale 2))
     (set-face-attribute 'org-level-8 nil :height (expt scale 1))))
+
+
+
+(defun my/org-capture-finalize-hook ()
+  (when (equal (frame-parameter nil 'name) "capture")
+    (run-at-time 0 nil #'delete-frame)))
+
+(add-hook 'org-capture-after-finalize-hook 'my/org-capture-finalize-hook)
+
+(defun my/org-agenda-quit-close-frame ()
+  (when (equal (frame-parameter nil 'name) "agenda")
+    (run-at-time 0 nil #'delete-frame)))
+
+(advice-add 'org-agenda-quit :after #'my/org-agenda-quit-close-frame)
+
+(use-package anki-editor
+  :ensure t)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; AI
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(use-package gptel
+  :ensure t
+  :config
+  (require 'gptel-integrations))
+
+(use-package mcp
+  :ensure t
+  :after gptel
+  :custom (mcp-hub-servers
+           `(("shopify" . (:command "npx"
+                                    :args ("-y" "@shopify/dev-mcp@latest")))))
+  :config (require 'mcp-hub)
+  :hook (after-init . mcp-hub-start-all-server))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; BUFFERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(use-package bufferlo
+  :ensure t
+  :init (bufferlo-mode))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; BBDB
@@ -501,6 +589,16 @@
   :config
   (add-to-list 'load-path (expand-file-name "lisp" user-emacs-directory)))
 
+(defun my/display-buffer-in-side-window (&optional buffer)
+  "Display BUFFER in dedicated side window."
+  (interactive)
+  (let ((curr-buffer (unless buffer
+                       (current-buffer)))
+        (display-buffer-mark-dedicated t))
+    (display-buffer-in-side-window buffer
+                                   '((side . right)
+                                     (window-parameters (no-delete-other-windows . t))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; FRONTEND WEB DEV
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -508,16 +606,67 @@
   :custom
   (prettier-js-command "prettierd")
   :hook
-  ((js-mode web-mode) . prettier-js-mode))
+  ((js-mode web-mode scss-mode css-mode) . prettier-js-mode))
 
 (use-package web-mode
-  :mode "\\.liquid\\'"
   :custom
   (web-mode-markup-indent-offset 2)
   (web-mode-css-indent-offset 2)
   (web-mode-code-indent-offset 2)
   (web-mode-enable-css-colorization t)
+  (web-mode-attr-indent-offset 2)
+  (web-mode-attr-value-indent-offset 4)
+  (web-mode-block-padding 2)
+  (web-mode-part-padding 2)
+  (web-mode-script-padding 2)
+  (web-mode-style-padding 2)
   (web-mode-extra-keywords '(("django" . ("doc" "enddoc")))))
+
+(define-derived-mode liquid-mode web-mode "Liquid"
+  "Major mode for editing Shopify Liquid files, derived from web-mode.")
+
+(add-to-list 'auto-mode-alist '("\\.liquid\\'" . liquid-mode))
+
+(use-package css-mode
+  :custom
+  (css-indent-offset 2))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; EGLOT
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(use-package eglot
+  :ensure t
+  :hook (liquid-mode . eglot-ensure)
+  :config
+  (setq-default eglot-workspace-configuration
+              '((:tailwindCSS . (:includeLanguages (:liquid-mode "html")
+                                                   :userLanguages (:liquid-mode "html")))))
+  (setq eglot-stay-out-of '(completion-styles))
+  (add-to-list 'eglot-server-programs
+               '(liquid-mode . ("rass" "liquidtailwind"))))
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Jira
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(use-package jira
+  :custom
+  (jira-base-url "https://udundi.atlassian.net")
+  (jira-token-is-personal-access-token nil)
+  (jira-api-version 3))
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Slack
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Leetcode
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -657,7 +806,34 @@
 (use-package ws-butler
   :hook (after-init . ws-butler-global-mode))
 
+(use-package emacs
+  :custom
+  (initial-scratch-message nil))
+
+(use-package pdf-tools
+  :ensure t
+  :mode "\\.pdf\\'")
 
 
+(with-eval-after-load 'project
+  (defun project-find-regexp-with-unique-buffer (orig-fun &rest args)
+    "An advice function that gives project-find-regexp a unique buffer name"
+    (require 'xref)
+    (let ((xref-buffer-name (format "%s %s" xref-buffer-name (car args))))
+      (apply orig-fun args)))
 
+  (advice-add 'project-find-regexp :around
+              #'project-find-regexp-with-unique-buffer))
+
+
+(use-package ediff
+  :custom
+  (ediff-split-window-function 'split-window-horizontally)
+  (ediff-window-setup-function 'ediff-setup-windows-plain))
 (put 'narrow-to-region 'disabled nil)
+
+
+(when-let ((colorterm (getenv "COLORTERM")))
+  (when (member colorterm '("truecolor" "24bit"))
+    (unless (display-graphic-p)
+      (set-terminal-parameter nil 'background-mode 'dark))))
