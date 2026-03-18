@@ -27,8 +27,8 @@
   ((prog-mode text-mode help-mode org-agenda-mode).  #'hl-line-mode)
   ((prog-mode text-mode help-mode org-agenda-mode).  #'visual-line-mode)
   :custom
-  (menu-bar-mode t)
-  (scroll-bar-mode t)
+  (menu-bar-mode nil)
+  (scroll-bar-mode nil)
   (tool-bar-mode nil)
   (blink-cursor-mode nil)
   (global-hl-line-mode nil)
@@ -837,3 +837,8 @@
   (when (member colorterm '("truecolor" "24bit"))
     (unless (display-graphic-p)
       (set-terminal-parameter nil 'background-mode 'dark))))
+
+(use-package xclip
+  :ensure t
+  :config
+  (xclip-mode 1))

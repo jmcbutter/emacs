@@ -21,11 +21,10 @@
                  nerd-icons-dired nerd-icons-ibuffer orderless
                  pdf-tools prettier-js rainbow-delimiters snippy
                  treesit-langs undo-fu-session vertico vundo web-mode
-                 ws-butler yasnippet-capf yasnippet-snippets))
+                 ws-butler xclip yasnippet-capf yasnippet-snippets))
  '(package-vc-selected-packages '((monet :url "https://github.com/stevemolitor/monet")))
  '(safe-local-variable-values
-   '((org-anki-default-note-type . "Cloze") (org-anki-inherit-tags)))
- '(tab-width 8 nil nil "Customized with use-package emacs"))
+   '((org-anki-default-note-type . "Cloze") (org-anki-inherit-tags))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
