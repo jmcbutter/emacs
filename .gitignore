@@ -6,3 +6,5 @@
 !init.el
 !early-init.el
 !custom-vars.el
+!user-lisp/
+!user-lisp/**/*

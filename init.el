@@ -8,7 +8,8 @@
                       ("nongnu" . "https://elpa.nongnu.org/nongnu/")))
   (use-package-always-defer t)
   (use-package-enable-imenu-support t)
-  (package-quickstart t))
+  (package-quickstart t)
+  (add-to-list 'load-path (expand-file-name "user-lisp/init/" user-emacs-directory)))
 
 ;; Customized Variables
 (use-package emacs
@@ -17,6 +18,9 @@
   :config
   (load custom-file 'noerror 'nomessage))
 
+(use-package emacs
+  :bind*
+  ("M-o" . #'other-window))
 ;; Shell Vars
 (use-package exec-path-from-shell
   :hook (after-init . exec-path-from-shell-initialize))
@@ -299,9 +303,7 @@
           (tsx . ("https://github.com/tree-sitter/tree-sitter-typescript" "v0.20.3" "tsx/src"))
           (typescript . ("https://github.com/tree-sitter/tree-sitter-typescript" "v0.20.3" "typescript/src"))
           (yaml . ("https://github.com/ikatyang/tree-sitter-yaml" "v0.5.0"))
-          (elisp . ("https://github.com/Wilfred/tree-sitter-elisp"))
           (gdscript . ("https://github.com/PrestonKnopp/tree-sitter-gdscript"))
-          (hyprlang . ("https://github.com/tree-sitter-grammars/tree-sitter-hyprlang"))
           (make . ("https://github.com/alemuller/tree-sitter-make"))
           (markdown . ("https://github.com/ikatyang/tree-sitter-markdown"))
           (vue . ("https://github.com/ikatyang/tree-sitter-vue"))))
@@ -370,167 +372,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ORG
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defun my/get-current-quarter-month-range ()
-  (let* ((now (decode-time))
-         (month (decoded-time-month now))
-         (year (decoded-time-year now))
-         (start-month (+ 1 (* 3 (/ (- month 1) 3))))
-         (next-q-month (+ start-month 3))
-         (end-year (if (> next-q-month 12) (+ year 1) year))
-         (end-month (if (> next-q-month 12) 1 next-q-month))
-         (q-end (encode-time 0 0 0 1 end-month end-year))
-         (days-left-in-q (/ (truncate (float-time (time-subtract q-end (current-time)))) 86400)))
-
-    (concat
-     (format-time-string "%b %d, %Y")
-     " to "
-     (format-time-string "%b %d, %Y" q-end)
-     " (" (number-to-string days-left-in-q) " days remaining)")))
-
-(defun my/get-current-month-range ()
-  (let* ((now (decode-time))
-         (month (decoded-time-month now))
-         (year (decoded-time-year now))
-         (next-month (+ month 1))
-         (month-end (encode-time 0 0 0 1 next-month year))
-         (days-left-in-month (/ (truncate (float-time (time-subtract month-end (current-time)))) 86400)))
-    (concat
-     (format-time-string "%b %d, %Y")
-     " to "
-     (format-time-string "%b %d, %Y" month-end)
-     " (" (number-to-string days-left-in-month) " days remaining)")))
-
-(defun my/get-current-sprint-range ()
-  (let* ((now (decode-time))
-         (current-year (decoded-time-year now))
-         (jan-1 (encode-time 0 0 0 1 1 current-year))
-         (jan-1-day (decoded-time-weekday (decode-time jan-1)))
-         (days-to-sun (% (- 7 jan-1-day) 7))
-         (first-sun (time-add jan-1 (* days-to-sun 86400)))
-         (seconds-since-anchor (float-time (time-subtract (current-time) first-sun)))
-         (days-since-anchor (truncate (/ seconds-since-anchor 86400)))
-         (sprint-index (/ days-since-anchor 14))
-         (sprint-start-day (* sprint-index 14))
-         (start-date (time-add first-sun (* sprint-start-day 86400)))
-         (end-date (time-add start-date  (* 13 86400)))
-         (days-left-in-sprint (/ (truncate (float-time (time-subtract end-date (current-time)))) 86400)))
-
-    (concat
-     (format-time-string "%b %d, %Y" start-date)
-     " to "
-     (format-time-string "%b %d, %Y" end-date)
-     " (" (number-to-string days-left-in-sprint) " days remaining)")))
-
-(use-package org
-  :bind (("C-c a" . #'org-agenda)
-         ("C-c l" . #'org-store-link)
-         ("C-c c" . #'org-capture))
-  :hook
-  (org-mode . org-indent-mode)
-  :custom
-  (org-edit-src-content-indentation 4)
-  (org-agenda-files (mapcar (lambda (file) (concat org-directory file))
-                            '("dash.org" "mobile.org")))
-  (org-agenda-show-future-repeats nil)
-  (org-priority-highest ?A)
-  (org-priority-lowest ?E)
-  (org-priority-default ?D)
-  (org-agenda-show-all-dates t)
-  (org-agenda-skip-deadline-if-done t)
-  (org-agenda-skip-scheduled-if-done t)
-  (org-agenda-skip-deadline-prewarning-if-scheduled t)
-  (org-agenda-skip-scheduled-if-deadline-is-shown 'not-today)
-  (org-agenda-persistent-marks t)
-  (org-agenda-prefer-last-repeat t)
-  (org-stuck-projects '("+PROJECT" ("TODO") nil nil))
-  (org-agenda-todo-ignore-deadlines 'all)
-  (org-agenda-todo-ignore-scheduled 'all)
-  (org-agenda-todo-ignore-timestamp 'all)
-  (org-agenda-deadline-leaders '("DUE: " "DUE IN %d DAYS: " "OVERDUE BY %d DAYS: "))
-  (org-agenda-scheduled-leaders '("TODAY: " "RESCHEDULE (-%d)"))
-  (org-agenda-sorting-strategy '((agenda time-up priority-up deadline-up scheduled-up urgency-up habit-down category-keep)
-                                 (todo urgency-down category-keep) (tags urgency-down category-keep)
-                                 (search category-keep)))
-
-  (org-agenda-fontify-priorities t)
-  (org-agenda-restore-windows-after-quit t)
-  (org-agenda-window-setup 'current-window)
-  (org-agenda-dim-blocked-tasks 'invisible)
-  (org-enforce-todo-dependencies t)
-  (org-use-fast-todo-selection t)
-  (org-agenda-prefix-format '((agenda . " %i %-20:c%?-12t% s") (todo . " %i %-20:c")
-                              (tags . " %i %-20:c") (search . " %i %-20:c")))
-  (org-tag-alist
-   '(("WAITING" . ?w)
-     ("MAYBE" . ?m)
-     ("PROJECT" . ?j)
-     (:startgrouptag)
-     ("@context")
-     (:grouptags)
-     ("@home" . ?h)
-     ("@errand" . ?e)
-     ("@computer" . ?c)
-     ("@backpack" . ?b)
-     ("@phone" . ?p)
-     (:endgroup)
-     (:endgroup)))
-
-  (org-capture-templates
-   `(("t" "Todo" entry (file+olp ,(concat org-directory "dash.org") "Inbox") "* TODO %? " :prepend t)
-     ("a" "Appointment" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Appointments") "*  %?  %^T" :prepend t)
-     ("m" "Meeting" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Meetings") "* %? \n%^T")
-     ("b" "Birthday or Anniversary" entry (file+olp ,(concat org-directory "dash.org") "Calendar" "Birthdays/Special Dates") "* %? \n%^T")
-     ("q" "Question or Idea" entry (file+olp ,(concat org-directory "dash.org") "Inbox") "* %? \n%l")
-     ("l" "Log" entry (file+olp+datetree ,(concat org-directory "logbook.org")) "* %?")))
-
-  (org-agenda-custom-commands
-   '(("a" "Agenda"
-      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
-       (tags-todo "+WAITING"))
-      ((org-agenda-category-filter-preset '("-cleaning"))
-       (org-agenda-span 1)))
-     ("c" "Cleaning"
-      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
-       (tags-todo "+WAITING"))
-      ((org-agenda-category-filter-preset '("+cleaning"))
-       (org-agenda-span 1)))
-     ("w" "Work"
-      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
-       (tags-todo "+WAITING"))
-      ((org-agenda-category-filter-preset '("+Clients" "+Business"))
-       (org-agenda-span 1)))
-     ("p" "Personal"
-      ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'regexp ":WAITING:"))))
-       (tags-todo "+WAITING"))
-      ((org-agenda-category-filter-preset '("-Clients" "-Business" "-cleaning"))
-       (org-agenda-span 1)))))
-
-  (org-refile-targets '((org-agenda-files . (:maxlevel . 2))))
-  :config
-  (let ((scale 1.015))
-    (set-face-attribute 'org-level-1 nil :height (expt scale 8))
-    (set-face-attribute 'org-level-2 nil :height (expt scale 7))
-    (set-face-attribute 'org-level-3 nil :height (expt scale 6))
-    (set-face-attribute 'org-level-4 nil :height (expt scale 5))
-    (set-face-attribute 'org-level-5 nil :height (expt scale 4))
-    (set-face-attribute 'org-level-6 nil :height (expt scale 3))
-    (set-face-attribute 'org-level-7 nil :height (expt scale 2))
-    (set-face-attribute 'org-level-8 nil :height (expt scale 1))))
-
-
-
-(defun my/org-capture-finalize-hook ()
-  (when (equal (frame-parameter nil 'name) "capture")
-    (run-at-time 0 nil #'delete-frame)))
-
-(add-hook 'org-capture-after-finalize-hook 'my/org-capture-finalize-hook)
-
-(defun my/org-agenda-quit-close-frame ()
-  (when (equal (frame-parameter nil 'name) "agenda")
-    (run-at-time 0 nil #'delete-frame)))
-
-(advice-add 'org-agenda-quit :after #'my/org-agenda-quit-close-frame)
-
+(require 'init-org)
 (use-package anki-editor
   :ensure t)
 
@@ -578,9 +420,7 @@
   :ensure t)
 
 
-(use-package emacs
-  :bind*
-  ("M-o" . #'other-window))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; CUSTOM ELISP
@@ -588,16 +428,6 @@
 (use-package emacs
   :config
   (add-to-list 'load-path (expand-file-name "lisp" user-emacs-directory)))
-
-(defun my/display-buffer-in-side-window (&optional buffer)
-  "Display BUFFER in dedicated side window."
-  (interactive)
-  (let ((curr-buffer (unless buffer
-                       (current-buffer)))
-        (display-buffer-mark-dedicated t))
-    (display-buffer-in-side-window buffer
-                                   '((side . right)
-                                     (window-parameters (no-delete-other-windows . t))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; FRONTEND WEB DEV
@@ -833,10 +663,10 @@
 (put 'narrow-to-region 'disabled nil)
 
 
-(when-let ((colorterm (getenv "COLORTERM")))
-  (when (member colorterm '("truecolor" "24bit"))
-    (unless (display-graphic-p)
-      (set-terminal-parameter nil 'background-mode 'dark))))
+;; (when-let ((colorterm (getenv "COLORTERM")))
+;;   (when (member colorterm '("truecolor" "24bit"))
+;;     (unless (display-graphic-p)
+;;       (set-terminal-parameter nil 'background-mode 'dark))))
 
 (use-package xclip
   :ensure t
