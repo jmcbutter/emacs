@@ -14,9 +14,22 @@
 ;; Global Variables
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defvar JMB/ORG-DIRECTORY (expand-file-name "Org" "~/"))
-(defvar JMB/ORG-AGENDA-FILE (expand-file-name "todos.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-LOG-FILE (expand-file-name "logs.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-LIST-FILE (expand-file-name "lists.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-AGENDA-DIRECTORY (expand-file-name "Agenda/" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-LOG-DIRECTORY (expand-file-name "Logs/" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-NOTE-DIRECTORY (expand-file-name "Notes/" JMB/ORG-DIRECTORY))
+
+
+(defvar JMB/ORG-CALENDAR-FILE (expand-file-name "Calendar.org" JMB/ORG-AGENDA-DIRECTORY))
+(defvar JMB/ORG-TASK-FILE (expand-file-name "Plan.org" JMB/ORG-AGENDA-DIRECTORY))
+(defvar JMB/ORG-ROUTINE-FILE (expand-file-name "Routine.org" JMB/ORG-AGENDA-DIRECTORY))
+(defvar JMB/ORG-MEAL-FILE (expand-file-name "Views/Meals.org" JMB/ORG-AGENDA-DIRECTORY))
+(defvar JMB/ORG-PEOPLE-FILE (expand-file-name "Views/People.org" JMB/ORG-AGENDA-DIRECTORY))
+(defvar JMB/ORG-CLEANING-FILE (expand-file-name "Views/Cleaning.org" JMB/ORG-AGENDA-DIRECTORY))
+
+(defvar JMB/ORG-ACCOMPLISHMENT-LOG-FILE (expand-file-name "Accomplishments.org" JMB/ORG-LOG-DIRECTORY))
+(defvar JMB/ORG-COMMUNICATION-LOG-FILE (expand-file-name "Communications.org" JMB/ORG-LOG-DIRECTORY))
+(defvar JMB/ORG-DECISION-LOG-FILE (expand-file-name "Decisions.org" JMB/ORG-LOG-DIRECTORY))
+(defvar JMB/ORG-TASK-LOG-FILE (expand-file-name "Tasks.org" JMB/ORG-LOG-DIRECTORY))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Configuration
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -25,27 +38,106 @@
         org-stuck-projects '("+PROJECT" ("TODO") nil nil)
         org-use-fast-todo-selection t
         org-enforce-todo-dependencies t
-        org-agenda-files (list JMB/ORG-AGENDA-FILE)))
+        org-agenda-files (list JMB/ORG-CALENDAR-FILE
+                               JMB/ORG-TASK-FILE
+                               JMB/ORG-ROUTINE-FILE)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Capture
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (with-eval-after-load 'org
   (setq-default org-capture-templates
-                '(("a" "Appointment" entry
-		   (file+olp JMB/ORG-AGENDA-FILE "Inbox")
-		   "* %? %^T")
-                  ("c" "Clocked In Task" item
-                   (clock)
-                   "- %?"
-                   :clock-keep t
-                   :unnarrowed t)
-		  ("t" "Todo" entry
-		   (file+olp JMB/ORG-AGENDA-FILE "Inbox")
-		   "* TODO %?")
-		  ("l" "Log" entry
-		   (file+olp JMB/ORG-LOG-FILE "Inbox")
-		   "* %U %?")
+                '(("a" "Agenda Item")
+                  ("ar" "Recurring Appointment" entry
+                   (file+olp  JMB/ORG-CALENDAR-FILE "Recurring")
+                   "*  %?  %^T"
+                   :prepend t)
+                  ("as" "Special" entry
+                   (file+olp  JMB/ORG-CALENDAR-FILE "Birthdays/Special Dates")
+                   "*  %?  %^T"
+                   :prepend t)
+                  ("au" "Upcoming Appointment" entry
+                   (file+olp JMB/ORG-CALENDAR-FILE "Upcoming")
+                   "*  %?  %^T"
+                   :prepend t)
+
+                  ("t" "Task")
+                  ("ti" "Inbox" entry
+                   (file+olp JMB/ORG-TASK-FILE "Inbox")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tt" "Today" entry
+                   (file+olp JMB/ORG-TASK-FILE "Today")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tw" "This Week" entry
+                   (file+olp JMB/ORG-TASK-FILE "This Week")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tm" "This Month" entry
+                   (file+olp JMB/ORG-TASK-FILE "This Month")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tq" "This Quarter" entry
+                   (file+olp JMB/ORG-TASK-FILE "This Quarter")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tk" "Keep In Mind" entry
+                   (file+olp JMB/ORG-TASK-FILE "Keep in Mind")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tg" "Active Goals" entry
+                   (file+olp JMB/ORG-TASK-FILE "Active Goals")
+                   "* GOAL %? "
+                   :prepend t)
+                  ("tl" "Later" entry
+                   (file+olp JMB/ORG-TASK-FILE "Later")
+                   "* TODO %? "
+                   :prepend t)
+                  ("tr" "Routine")
+                  ("trd" "Daily" entry
+                   (file JMB/ORG-ROUTINE-FILE)
+                   "* DAILY %?\nSCHEDULED: %(format \"<%s .+1d>\" (org-read-date))\n"
+                   :prepend t)
+                  ("trw" "Weekly" entry
+                   (file JMB/ORG-ROUTINE-FILE)
+                   "* WEEKLY %?\nSCHEDULED: %(format \"<%s ++1w>\" (org-read-date))\n"
+                   :prepend t)
+                  ("trm" "Monthly" entry
+                   (file JMB/ORG-ROUTINE-FILE)
+                   "* MONTHLY %?\nSCHEDULED: %(format \"<%s ++1m>\" (org-read-date))\n"
+                   :prepend t)
+                  ("trq" "Quarterly" entry
+                   (file JMB/ORG-ROUTINE-FILE)
+                   "* QUARTERLY %?\nSCHEDULED: %(format \"<%s ++3m>\" (org-read-date))\n"
+                   :prepend t)
+                  ("try" "Yearly" entry
+                   (file JMB/ORG-ROUTINE-FILE)
+                   "* YEARLY %?\nSCHEDULED: %(format \"<%s ++1y>\" (org-read-date))\n"
+                   :prepend t)
+
+                  ("v" "View")
+                  ("vm" "Meal" entry
+                   (file+olp JMB/ORG-MEAL-FILE "Upcoming")
+                   "* PREP %^{Recipe} - %^{Book}\n%?")
+                  ("vp" "People" entry
+                   (file+olp JMB/ORG-PEOPLE-FILE "Inbox")
+                   "* %^{Conversation Type: |DISCUSS|INFORM|PITCH|FOLLOWUP|DELEGATE|ASK|CONTACT} %?")
+
+                  ("l" "Log")
+                  ("la" "Accomplishments" entry
+                   (file+olp+datetree JMB/ORG-ACCOMPLISHMENT-LOG-FILE)
+                   "* %?")
+                  ("lc" "Communications" entry
+                   (file+olp+datetree JMB/ORG-COMMUNICATION-LOG-FILE)
+                   "* %?")
+                  ("ld" "Decisions" entry
+                   (file+olp+datetree JMB/ORG-DECISION-LOG-FILE)
+                   "* %?")
+                  ("lt" "Tasks" entry
+                   (file+olp+datetree JMB/ORG-TASK-LOG-FILE)
+                   "* %?")
+
                   ("w"
                    "Website"
                    entry
@@ -66,8 +158,7 @@
         org-agenda-skip-deadline-if-done t
         org-agenda-skip-scheduled-if-done t
         org-agenda-skip-deadline-prewarning-if-scheduled nil
-        org-agenda-skip-scheduled-if-deadline-is-shown t
-	org-agenda-skip-scheduled-repeats-after-deadline t
+        org-agenda-skip-scheduled-if-deadline-is-shown nil
         org-agenda-persistent-marks t
         org-agenda-prefer-last-repeat t
         org-todo-repeat-to-state t
@@ -75,7 +166,7 @@
         org-agenda-todo-ignore-scheduled 'future
         org-agenda-todo-ignore-timestamp nil
         org-agenda-deadline-leaders '("DUE: " "DUE IN %d DAYS: " "OVERDUE BY %d DAYS: ")
-        org-agenda-scheduled-leaders '("TODAY: " "TODAY: ")
+        org-agenda-scheduled-leaders '("TODAY: " "RESCHEDULE (-%d)")
         org-agenda-fontify-priorities t
         org-agenda-restore-windows-after-quit t
         org-agenda-window-setup 'current-window
@@ -105,24 +196,23 @@
                 (org-agenda-span 1)))
   "The base agenda layout")
 
-
-(defun jmb/build-org-agenda-base-todo (tag-todo-str header)
-  `(tags-todo ,tag-todo-str
+(defun jmb/build-org-agenda-base-todo (todo-kwd header &optional tag)
+  `(tags-todo ,(concat "TODO=\"" todo-kwd "\"" (when tag (concat "+" tag)))
               ((org-agenda-overriding-header ,header))))
 
 
-(defun jmb/build-org-agenda-custom-command (keys name &optional tags-todo-str)
+(defun jmb/build-org-agenda-custom-command (keys name tag-filter-preset)
   (list keys name
         (list jmb/org-agenda-base-agenda
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+TODAY" tags-todo-str) "Today")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_WEEK" tags-todo-str) "This Week")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_MONTH" tags-todo-str) "This Month")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_QUARTER" tags-todo-str) "This Quarter")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_YEAR" tags-todo-str) "This Year")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+SOMETIME" tags-todo-str) "Sometime")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"WAIT\"" tags-todo-str) "Waiting")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"HOLD\"" tags-todo-str) "On Hold"))
-	  '((org-agenda-span 1))))
+              (jmb/build-org-agenda-base-todo "TODO" "Today" "TODAY")
+              (jmb/build-org-agenda-base-todo "TODO" "This Week" "WEEK")
+              (jmb/build-org-agenda-base-todo "TODO" "This Month" "MONTH")
+              (jmb/build-org-agenda-base-todo "TODO" "This Quarter" "QUARTER")
+              (jmb/build-org-agenda-base-todo "TODO" "Later" "LATER")
+              (jmb/build-org-agenda-base-todo "WAIT" "Waiting")
+              (jmb/build-org-agenda-base-todo "HOLD" "On Hold"))
+    `((org-agenda-tag-filter-preset (quote ,tag-filter-preset))
+      (org-agenda-span 1))))
 
 
 (defvar jmb/org-agenda-custom-agenda-command
@@ -145,15 +235,19 @@
      (tags-todo "CATEGORY=\"General\"" ((org-agenda-overriding-header "General")))
      (tags-todo "CATEGORY=\"Cars\"" ((org-agenda-overriding-header "Cars")))
      (tags-todo "CATEGORY=\"Yard\"" ((org-agenda-overriding-header "Yard"))))
-    ((org-agenda-files '(,JMB/ORG-LIST-FILE))
+    ((org-agenda-files '(,JMB/ORG-CLEANING-FILE))
      (org-agenda-span 1))))
 
 
 (with-eval-after-load 'org
   (setq-default org-agenda-custom-commands
-        (list (jmb/build-org-agenda-custom-command "a" "All")
+        (list (jmb/build-org-agenda-custom-command "a" "All" '())
               jmb/org-agenda-custom-cleaning-command
-              (jmb/build-org-agenda-custom-command "w" "Work" "+Client={.+}"))))
+              (jmb/build-org-agenda-custom-command "w" "Work" '("+Work"))
+              (jmb/build-org-agenda-custom-command "n" "Uncivil" '("+Uncivil"))
+              (jmb/build-org-agenda-custom-command "u" "Udundi" '("+Udundi"))
+              (jmb/build-org-agenda-custom-command "s" "Side" '("+Side"))
+              (jmb/build-org-agenda-custom-command "p" "Personal" '("-Uncivil" "-Udundi" "-Side")))))
 
 
 
@@ -207,15 +301,3 @@
 
 (provide 'init-org)
 ;;; init-org.el ends here
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(package-selected-packages nil))
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- )
