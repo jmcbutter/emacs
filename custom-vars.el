@@ -12,18 +12,8 @@
      ("account" "%(binary) -f %(ledger-file) reg %(account)")))
  '(org-directory "~/Dropbox/Documents/")
  '(package-selected-packages
-   '(agent-shell anki-editor bbdb bookmark+ bookmarkplus bufferlo
-                 calibredb cape claude-code consult corfu css csv-mode
-                 diff-hl diminish dmenu eat eldoc-box emacs-everywhere
-                 exec-path-from-shell exwm gptel helpful hl-todo
-                 indent-guide inheritenv jira ledger-mode leetcode
-                 magit marginalia mason mcp monet
-                 nerd-icons-completion nerd-icons-corfu
-                 nerd-icons-dired nerd-icons-ibuffer orderless
-                 org-edna pdf-tools plantuml-mode prettier-js
-                 rainbow-delimiters snippy treemacs treesit-langs
-                 undo-fu-session vertico vundo web-mode ws-butler
-                 xclip yasnippet-capf yasnippet-snippets))
+   '(bbdb marginalia nerd-icons-completion nerd-icons-dired
+          nerd-icons-ibuffer org-edna undo-fu-session vertico vundo))
  '(package-vc-selected-packages '((monet :url "https://github.com/stevemolitor/monet")))
  '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")
