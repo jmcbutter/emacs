@@ -10,13 +10,14 @@
   (use-package-enable-imenu-support t)
   (package-quickstart t)
   :config
-  (add-to-list 'load-path (expand-file-name "user-lisp/init/" user-emacs-directory)))
+  (add-to-list 'load-path (expand-file-name "user-lisp/init/" user-emacs-directory))
+  (add-to-list 'load-path (expand-file-name "user-lisp/lang/" user-emacs-directory))
+  (add-to-list 'load-path (expand-file-name "user-lisp/config/" user-emacs-directory)))
 
 (use-package org-edna
   :ensure t
   :config
   (org-edna-mode))
-
 
 ;; Customized Variables
 (use-package emacs
@@ -24,6 +25,17 @@
   (custom-file (locate-user-emacs-file "custom-vars.el"))
   :config
   (load custom-file 'noerror 'nomessage))
+
+(use-package emacs
+  :config
+  (load-theme 'modus-operandi)
+  (set-frame-font "-*-Inconsolata Nerd Font Mono-regular-normal-normal-*-*-*-*-*-m-0-iso10646-1")
+  (custom-set-faces '(variable-pitch ((t (:family "LiterationSerif Nerd Font")))))
+                                        ; (custom-set-faces '(variable-pitch ((t (:family "iMWritingMono Nerd Font")))))
+                                        ; (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
+  (add-hook 'org-mode-hook 'variable-pitch-mode))
+
+
 
 (use-package emacs
   :bind*
@@ -45,7 +57,6 @@
   (global-hl-line-mode nil)
   (display-fill-column-indicator-column 80)
   (whitespace-style '(face tabs tab-mark trailing)))
-
 
 ;; Editing
 (use-package emacs
@@ -167,4 +178,10 @@
 (use-package emacs
   :custom
   (initial-scratch-message nil))
+
+
+
+(require 'config-web-mode)
+(require 'config-lsp-mode)
+(require 'lang-liquid)
 

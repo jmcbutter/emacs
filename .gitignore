@@ -8,3 +8,5 @@
 !custom-vars.el
 !user-lisp/
 !user-lisp/**/*
+!lsp/
+!lsp/**/*
