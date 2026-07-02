@@ -5,10 +5,12 @@
 (use-package eglot
   :ensure t
   :custom
-  (eglot-ignored-server-capabilities '(:documentOnTypeFormattingProvider :documentHighlightProvider))
-  (eglot-send-changes-idle-time 1.0)
-  (eglot-events-buffer-config '(:size 0)))
+  (eglot-code-action-indications nil)
+  :config
+  (add-hook 'eglot-managed-mode-hook (lambda () (eldoc-mode -1)))
+  (add-to-list 'eglot-ignored-server-capabilities :documentHighlightProvider))
 
 (provide 'config-eglot)
 ;;; config-eglot.el ends here
+
 

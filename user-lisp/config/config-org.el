@@ -1,4 +1,4 @@
-;;; init-org.el --- Org Mode Configuration -*- lexical-binding: t -*-
+;;; config-org.el --- Org Mode Configuration -*- lexical-binding: t -*-
 ;;; Commentary:
 ;;; Code:
 
@@ -8,9 +8,11 @@
 ;; Global Variables
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defvar JMB/ORG-DIRECTORY (expand-file-name "Org" "~/"))
-(defvar JMB/ORG-AGENDA-FILE (expand-file-name "todos.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-LOG-FILE (expand-file-name "logs.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-LIST-FILE (expand-file-name "lists.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-INBOX-FILE (expand-file-name "inbox.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-TODOS-FILE (expand-file-name "todos.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-PROJECTS-FILE (expand-file-name "projects.org" JMB/ORG-DIRECTORY))
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Configuration
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -19,7 +21,7 @@
         org-stuck-projects '("+PROJECT" ("TODO") nil nil)
         org-use-fast-todo-selection t
         org-enforce-todo-dependencies t
-        org-agenda-files (list JMB/ORG-AGENDA-FILE)))
+        org-agenda-files `(,JMB/ORG-DIRECTORY)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Capture
@@ -27,7 +29,7 @@
 (with-eval-after-load 'org
   (setq-default org-capture-templates
                 '(("a" "Appointment" entry
-		   (file+olp JMB/ORG-AGENDA-FILE "Inbox")
+		   (file+olp JMB/ORG-INBOX-FILE "Inbox")
 		   "* %? %^T")
                   ("c" "Clocked In Task" item
                    (clock)
@@ -35,11 +37,8 @@
                    :clock-keep t
                    :unnarrowed t)
 		  ("t" "Todo" entry
-		   (file+olp JMB/ORG-AGENDA-FILE "Inbox")
+		   (file+olp JMB/ORG-INBOX-FILE "Inbox")
 		   "* TODO %?")
-		  ("l" "Log" entry
-		   (file+olp JMB/ORG-LOG-FILE "Inbox")
-		   "* %U %?")
                   ("w"
                    "Website"
                    entry
@@ -124,29 +123,10 @@
     ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo '("WAIT" "HOLD")))
                 (org-agenda-span 1))))))
 
-(defvar jmb/org-agenda-custom-cleaning-command
-  `("c" "Cleaning"
-    ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo '("WAIT" "HOLD")))
-                (org-agenda-span 1)))
-     (tags-todo "CATEGORY=\"Kitchen\"" ((org-agenda-overriding-header "Kitchen")))
-     (tags-todo "CATEGORY=\"Bedroom\"" ((org-agenda-overriding-header "Bedroom")))
-     (tags-todo "CATEGORY=\"Bathroom\"" ((org-agenda-overriding-header "Bathroom")))
-     (tags-todo "CATEGORY=\"Common Rooms\"" ((org-agenda-overriding-header "Common Rooms")))
-     (tags-todo "CATEGORY=\"Laundry Room\"" ((org-agenda-overriding-header "Daily")))
-     (tags-todo "CATEGORY=\"Pantry\"" ((org-agenda-overriding-header "Pantry")))
-     (tags-todo "CATEGORY=\"Office\"" ((org-agenda-overriding-header "Office")))
-     (tags-todo "CATEGORY=\"Garage\"" ((org-agenda-overriding-header "Garage")))
-     (tags-todo "CATEGORY=\"General\"" ((org-agenda-overriding-header "General")))
-     (tags-todo "CATEGORY=\"Cars\"" ((org-agenda-overriding-header "Cars")))
-     (tags-todo "CATEGORY=\"Yard\"" ((org-agenda-overriding-header "Yard"))))
-    ((org-agenda-files '(,JMB/ORG-LIST-FILE))
-     (org-agenda-span 1))))
-
 
 (with-eval-after-load 'org
   (setq-default org-agenda-custom-commands
         (list (jmb/build-org-agenda-custom-command "a" "All")
-              jmb/org-agenda-custom-cleaning-command
               (jmb/build-org-agenda-custom-command "w" "Work" "+Client={.+}"))))
 
 
@@ -156,15 +136,15 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (with-eval-after-load 'org
   (setq-default org-edit-src-content-indentation 4)
-  (let ((scale 1.075))
-    (set-face-attribute 'org-level-1 nil :height (expt scale 5))
-    (set-face-attribute 'org-level-2 nil :height (expt scale 4))
-    (set-face-attribute 'org-level-3 nil :height (expt scale 3))
-    (set-face-attribute 'org-level-4 nil :height (expt scale 2))
-    (set-face-attribute 'org-level-5 nil :height (expt scale 1))
-    (set-face-attribute 'org-level-6 nil :height (expt scale 0))
-    (set-face-attribute 'org-level-7 nil :height (expt scale -1))
-    (set-face-attribute 'org-level-8 nil :height (expt scale -2)))
+  (let ((scale 1.15))
+    (set-face-attribute 'org-level-1 nil :height (expt scale 3) :weight 'medium :slant 'normal)
+    (set-face-attribute 'org-level-2 nil :height (expt scale 3) :weight 'medium :slant 'oblique)
+    (set-face-attribute 'org-level-3 nil :height (expt scale 2) :weight 'medium :slant 'normal)
+    (set-face-attribute 'org-level-4 nil :height (expt scale 2) :weight 'medium :slant 'oblique)
+    (set-face-attribute 'org-level-5 nil :height (expt scale 1) :weight 'medium :slant 'normal)
+    (set-face-attribute 'org-level-6 nil :height (expt scale 1) :weight 'medium :slant 'oblique)
+    (set-face-attribute 'org-level-7 nil :height (expt scale 0) :weight 'medium :slant 'normal)
+    (set-face-attribute 'org-level-8 nil :height (expt scale 0) :weight 'medium :slant 'oblique))
   (add-hook 'org-mode-hook #'org-indent-mode))
 
 
@@ -173,13 +153,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun jmb/find-org-file ()
   (interactive)
-  (let* ((directory (completing-read "File Type: " (directory-files JMB/ORG-DIRECTORY nil "^\\([^.]\\|\\.[^.]\\|\\.\\..\\)")))
-         (filename
-          (read-file-name "Find File: " (concat JMB/ORG-DIRECTORY directory "/"))))
-    (if (and (directory-name-p filename)
-             (member "index.org" (directory-files filename)))
-        (find-file (expand-file-name (concat filename "index.org")))
-      (find-file (expand-file-name filename)))))
+  (find-file (read-file-name "Find Org File: " (concat JMB/ORG-DIRECTORY "/"))))
 
 
 
@@ -196,20 +170,9 @@
 (define-key jmb/org-global-prefix-map (kbd "l") 'org-store-link)
 (define-key jmb/org-global-prefix-map (kbd "o") 'org-clock-out)
 (define-key jmb/org-global-prefix-map (kbd "p") 'org-clock-in-last)
+
 (define-key global-map (kbd "C-c o") jmb/org-global-prefix-map)
 
 
-(provide 'init-org)
-;;; init-org.el ends here
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(package-selected-packages nil))
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- )
+(provide 'config-org)
+;;; config-org.el ends here

@@ -7,9 +7,24 @@
 
 
 
+;;; Generated autoloads from minor-modes/dumb-indent-mode.el
+
+(register-definition-prefixes "minor-modes/dumb-indent-mode" '("dumb-"))
+
+
+;;; Generated autoloads from init/init-linux.el
+
+(register-definition-prefixes "init/init-linux" '("liquid-mode"))
+
+
 ;;; Generated autoloads from init/init-org.el
 
 (register-definition-prefixes "init/init-org" '("JMB/ORG-" "jmb/"))
+
+
+;;; Generated autoloads from lang/lang-liquid.el
+
+(register-definition-prefixes "lang/lang-liquid" '("liquid-mode"))
 
 
 ;;; Generated autoloads from packages/shopify-liquid-docs.el
@@ -27,6 +42,12 @@
 (autoload 'shopify-liquid-docs-refresh "packages/shopify-liquid-docs"
 "Re-download and reload all documentation data." t)
 (register-definition-prefixes "packages/shopify-liquid-docs" '("shopify-liquid-docs-"))
+
+
+;;; Generated autoloads from config/config-org.el
+
+(register-definition-prefixes "config/config-org" '("JMB/ORG-" "jmb/"))
+
 
 ;;; End of scraped data
 

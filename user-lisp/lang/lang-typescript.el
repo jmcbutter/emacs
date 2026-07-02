@@ -2,8 +2,8 @@
 ;;; Commentary:
 ;;; Code:
 
+(use-package typescript-ts-mode)
 
 
 (provide 'lang-typescript)
 ;;; lang-typescript.el ends here
-

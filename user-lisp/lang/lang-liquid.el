@@ -10,39 +10,35 @@
                                                             "style" "endstyle"
                                                             "case" "endcase"))))
 ;; 1. Real major mode for .liquid
-(define-derived-mode liquid-mode mhtml-mode "Liquid"
+(define-derived-mode liquid-mode web-mode "Liquid"
   "Major mode for Shopify Liquid templates.")
 (add-to-list 'auto-mode-alist '("\\.liquid\\'" . liquid-mode))
 
-(use-package lsp-mode
-  :ensure t
-  :init
-  (add-hook 'liquid-mode-hook #'lsp-deferred)
-  :config
-  (add-to-list 'lsp-language-id-configuration '("\\.liquid\\'" . "liquid"))
-  ;; (lsp-register-client
-  ;;  (make-lsp-client
-  ;;   :new-connection (lsp-stdio-connection '("shopify" "theme" "language-server"))
-  ;;   :activation-fn (lsp-activate-on "liquid")
-  ;;   :priority 1
-  ;;   :add-on? t
-  ;;   :initialization-options (list :themeCheck
-  ;;                                 ;; The inner `list` creates the nested JSON object
-  ;;                                 ;; that the server expects as the value.
-  ;;                                 (list :checkOnOpen t
-  ;;                                       :checkOnChange t
-  ;;                                       :checkOnSave t
-  ;;                                       :preloadOnBoot t))
-  ;;   :server-id 'shopify-theme-ls))
-  )
+;; (defun jmb/liquid-eglot-contact (&optional _interactive _project)
+;;   "Contact spec for `liquid-mode': eglot -> rass -> {Shopify theme LS, Tailwind}.
 
+;; eglot speaks to a single LSP server per buffer, so we put João Távora's
+;; `rass' multiplexer (https://github.com/joaotavora/rassumfrassum) in front
+;; of it: eglot talks to one `rass' process, which fans out to the Shopify
+;; theme language server and the Tailwind CSS language server.
 
-;; ;; 2. Manage it with rass AND force the languageId both servers expect
-;; (with-eval-after-load 'eglot
-;;   (add-to-list 'eglot-server-programs
-;;                '((liquid-mode :language-id "liquid") . ("shopify" "theme" "language-server")))
-;;   (add-hook 'liquid-mode-hook #'eglot-ensure))
+;; The backend server list, the per-server themeCheck options, and a longer
+;; completion-aggregation timeout (rass's stock 3000ms cap truncates the
+;; theme server's slower completion replies) all live in the `liquidtail'
+;; preset at ~/.config/rassumfrassum/liquidtail.py."
+;;   (list (or (executable-find "rass")
+;;             (expand-file-name "~/.local/bin/rass"))
+;;         "liquidtail"))
+
+;; (use-package eglot
+;;   :ensure t
+;;   :init
+;;   (add-hook 'liquid-mode-hook 'eglot-ensure)
+;;   :config
+;;   (add-to-list 'eglot-server-programs '(liquid-mode . jmb/liquid-eglot-contact))
+;;   ;; The theme-language-server's documentOnTypeFormattingProvider fires on every
+;;   ;; space, {, %, etc. — disabling it prevents 20-30s freezes while typing.
+;;   (add-to-list 'eglot-ignored-server-capabilities :documentOnTypeFormattingProvider))
 
 (provide 'lang-liquid)
 ;;; lang-liquid.el ends here
-

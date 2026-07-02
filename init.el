@@ -8,11 +8,7 @@
                       ("nongnu" . "https://elpa.nongnu.org/nongnu/")))
   (use-package-always-defer t)
   (use-package-enable-imenu-support t)
-  (package-quickstart t)
-  :config
-  (add-to-list 'load-path (expand-file-name "user-lisp/init/" user-emacs-directory))
-  (add-to-list 'load-path (expand-file-name "user-lisp/lang/" user-emacs-directory))
-  (add-to-list 'load-path (expand-file-name "user-lisp/config/" user-emacs-directory)))
+  (package-quickstart t))
 
 (use-package org-edna
   :ensure t
@@ -28,11 +24,14 @@
 
 (use-package emacs
   :config
-  (load-theme 'modus-operandi)
-  (set-frame-font "-*-Inconsolata Nerd Font Mono-regular-normal-normal-*-*-*-*-*-m-0-iso10646-1")
-  (custom-set-faces '(variable-pitch ((t (:family "LiterationSerif Nerd Font")))))
-                                        ; (custom-set-faces '(variable-pitch ((t (:family "iMWritingMono Nerd Font")))))
-                                        ; (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
+  (load-theme 'modus-operandi-deuteranopia)
+  (fido-vertical-mode)
+  (set-frame-font "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-16-*-*-*-m-0-iso10646-1")
+  ;; (custom-set-faces '(variable-pitch ((t (:family "iMWritingMono Nerd Font")))))
+  ;; (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
+  (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
+  ;; (custom-set-faces '(variable-pitch ((t (:family "AnonymousPro Nerd Font")))))
+  ;; (custom-set-faces '(variable-pitch ((t (:family "LiterationSerif Nerd Font")))))
   (add-hook 'org-mode-hook 'variable-pitch-mode))
 
 
@@ -107,7 +106,8 @@
 (use-package emacs
   :custom
   (native-comp-async-report-warnings-errors 'silent)
-  (warning-minimum-level :error))
+  ;; (warning-minimum-level :error)
+  )
 
 ;; Recovery
 (defun my-shorten-auto-save-file-name (&rest args)
@@ -164,7 +164,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ORG
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(require 'init-org)
+(require 'config-org)
+(require 'config-completion)
+(require 'config-eglot)
+(require 'config-web-mode)
+
+(require 'lang-liquid)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; BBDB
@@ -178,10 +183,3 @@
 (use-package emacs
   :custom
   (initial-scratch-message nil))
-
-
-
-(require 'config-web-mode)
-(require 'config-lsp-mode)
-(require 'lang-liquid)
-
