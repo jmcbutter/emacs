@@ -13,18 +13,8 @@
      ("reg" "%(binary) -f %(ledger-file) reg")
      ("payee" "%(binary) -f %(ledger-file) reg @%(payee)")
      ("account" "%(binary) -f %(ledger-file) reg %(account)")))
- '(lsp-tailwindcss-add-on-mode t)
- '(lsp-tailwindcss-class-functions [])
- '(lsp-tailwindcss-server-path
-   "/home/jordan/.nvm/versions/node/v24.16.0/bin/tailwindcss-language-server")
- '(lsp-tailwindcss-server-version "0.14.7")
+ '(org-agenda-files nil)
  '(org-directory "~/Dropbox/Documents/")
- '(org-tags-column 0)
- '(package-selected-packages nil)
- '(package-vc-selected-packages
-   '((agent-shell-sidebar :url
-                          "https://github.com/cmacrae/agent-shell-sidebar")
-     (monet :url "https://github.com/stevemolitor/monet")))
  '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")
  '(plantuml-jar-path "~/bin/plantuml-gplv2-1.2026.2.jar")
