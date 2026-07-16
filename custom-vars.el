@@ -10,19 +10,9 @@
      ("reg" "%(binary) -f %(ledger-file) reg")
      ("payee" "%(binary) -f %(ledger-file) reg @%(payee)")
      ("account" "%(binary) -f %(ledger-file) reg %(account)")))
- '(lsp-tailwindcss-add-on-mode t)
- '(lsp-tailwindcss-class-functions [])
- '(lsp-tailwindcss-server-path
-   "/home/jordan/.nvm/versions/node/v24.16.0/bin/tailwindcss-language-server")
- '(lsp-tailwindcss-server-version "0.14.7")
+ '(org-agenda-files nil)
  '(org-directory "~/Dropbox/Documents/")
- '(org-tags-column 0)
- '(package-selected-packages
-   '(agent-shell bbdb bufferlo corfu diminish eat ghostel gptel lsp-mode
-                 magit marginalia nerd-icons-completion
-                 nerd-icons-dired nerd-icons-ibuffer org-edna
-                 pdf-tools rainbow-delimiters undo-fu-session vertico
-                 vundo web-mode ws-butler xclip))
+ '(package-selected-packages nil)
  '(package-vc-selected-packages '((monet :url "https://github.com/stevemolitor/monet")))
  '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")

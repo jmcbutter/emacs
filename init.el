@@ -55,7 +55,15 @@
   (blink-cursor-mode nil)
   (global-hl-line-mode nil)
   (display-fill-column-indicator-column 80)
-  (whitespace-style '(face tabs tab-mark trailing)))
+  (whitespace-style '(face tabs tab-mark trailing))
+  (inhibit-startup-screen t)
+
+  :config
+  (load-theme 'modus-operandi)
+  (set-frame-font "Anonymous Pro 12" nil t))
+  ;; (set-frame-font "Goudy Old Style 12" nil t))
+
+
 
 ;; Editing
 (use-package emacs
@@ -74,6 +82,8 @@
 
 ;; Keybindings in Terminal Emacs
 (use-package emacs
+  :config
+  (w32-register-hot-key [M-tab])
   :bind  (("M-%" . #'query-replace-regexp)
           ;; C-S-<backspace> . #'kill-whole-line
           ;; C-x C-+ #'text-scale-adjust
@@ -133,15 +143,15 @@
   (delete-by-moving-to-trash t)
   (savehist-mode))
 
-(use-package undo-fu-session
-  :ensure t
-  :hook (after-init . undo-fu-session-global-mode)
-  :custom (undo-fu-session-incompatible-files '("\\.gpg$" "/COMMIT_EDITMSG\\'" "/git-rebase-todo\\'"))
-  :config
-  (when (executable-find "zstd")
-    ;; There are other algorithms available, but zstd is the fastest, and speed
-    ;; is our priority within Emacs
-    (setq undo-fu-session-compression 'zst)))
+;; (use-package undo-fu-session
+;;   :ensure t
+;;   :hook (after-init . undo-fu-session-global-mode)
+;;   :custom (undo-fu-session-incompatible-files '("\\.gpg$" "/COMMIT_EDITMSG\\'" "/git-rebase-todo\\'"))
+;;   :config
+;;   (when (executable-find "zstd")
+;;     ;; There are other algorithms available, but zstd is the fastest, and speed
+;;     ;; is our priority within Emacs
+;;     (setq undo-fu-session-compression 'zst)))
 
 (use-package vundo
   :ensure t

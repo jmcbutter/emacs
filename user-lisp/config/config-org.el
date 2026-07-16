@@ -11,8 +11,6 @@
 (defvar JMB/ORG-INBOX-FILE (expand-file-name "inbox.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-TODOS-FILE (expand-file-name "todos.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-PROJECTS-FILE (expand-file-name "projects.org" JMB/ORG-DIRECTORY))
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Configuration
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
