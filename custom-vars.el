@@ -4,6 +4,9 @@
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
+ '(ediff-merge-split-window-function 'split-window-horizontally)
+ '(ediff-split-window-function 'split-window-horizontally)
+ '(ediff-window-setup-function 'ediff-setup-windows-plain)
  '(ledger-reports
    '(("bal"
       "ledger [[ledger-mode-flags]] -f /home/jmcbutter/Dropbox/Documents/Support/Environment/301\\ 11th\\ St/profit-loss.ledger bal")
@@ -17,18 +20,17 @@
  '(lsp-tailwindcss-server-version "0.14.7")
  '(org-directory "~/Dropbox/Documents/")
  '(org-tags-column 0)
- '(package-selected-packages
-   '(agent-shell bbdb bufferlo corfu diminish eat ghostel gptel lsp-mode
-                 magit marginalia nerd-icons-completion
-                 nerd-icons-dired nerd-icons-ibuffer org-edna
-                 pdf-tools rainbow-delimiters undo-fu-session vertico
-                 vundo web-mode ws-butler xclip))
- '(package-vc-selected-packages '((monet :url "https://github.com/stevemolitor/monet")))
+ '(package-selected-packages nil)
+ '(package-vc-selected-packages
+   '((agent-shell-sidebar :url
+                          "https://github.com/cmacrae/agent-shell-sidebar")
+     (monet :url "https://github.com/stevemolitor/monet")))
  '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")
  '(plantuml-jar-path "~/bin/plantuml-gplv2-1.2026.2.jar")
  '(safe-local-variable-values
-   '((org-anki-default-note-type . "Cloze") (org-anki-inherit-tags))))
+   '((org-anki-default-note-type . "Cloze") (org-anki-inherit-tags)))
+ '(treesit-font-lock-level 4))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.

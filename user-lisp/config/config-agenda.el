@@ -1,4 +1,4 @@
-;;; config-org.el --- Org Mode Configuration -*- lexical-binding: t -*-
+;;; config-agenda.el --- Org Mode Agenda Configuration -*- lexical-binding: t -*-
 ;;; Commentary:
 ;;; Code:
 
@@ -29,16 +29,32 @@
 (with-eval-after-load 'org
   (setq-default org-capture-templates
                 '(("a" "Appointment" entry
-		   (file+olp JMB/ORG-INBOX-FILE "Inbox")
-		   "* %? %^T")
+                   (file+olp JMB/ORG-INBOX-FILE "CALENDAR")
+                   "* %? %^T")
                   ("c" "Clocked In Task" item
                    (clock)
                    "- %?"
                    :clock-keep t
                    :unnarrowed t)
-		  ("t" "Todo" entry
-		   (file+olp JMB/ORG-INBOX-FILE "Inbox")
-		   "* TODO %?")
+                  ("r" "Routine" entry
+                   (file+olp JMB/ORG-INBOX-FILE "ROUTINES")
+                   "* TODO %?")                  
+                  ("p" "Project" entry
+                   (file+olp JMB/ORG-INBOX-FILE "ONGOING PROJECTS")
+                   "* PROJECT %?")
+                  ("t" "Todo")
+                  ("tt" "Today" entry
+                   (file+olp JMB/ORG-INBOX-FILE "TODAY")
+                   "* TODO %?")
+                  ("tw" "This Week" entry
+                   (file+olp JMB/ORG-INBOX-FILE "THIS WEEK")
+                   "* TODO %?")
+                  ("tq" "This Quarter" entry
+                   (file+olp JMB/ORG-INBOX-FILE "THIS QUARTER")
+                   "* TODO %?")
+                  ("ts" "Sometime" entry
+                   (file+olp JMB/ORG-INBOX-FILE "SOMETIME")
+                   "* TODO %?")
                   ("w"
                    "Website"
                    entry
@@ -60,7 +76,7 @@
         org-agenda-skip-scheduled-if-done t
         org-agenda-skip-deadline-prewarning-if-scheduled nil
         org-agenda-skip-scheduled-if-deadline-is-shown t
-	org-agenda-skip-scheduled-repeats-after-deadline t
+        org-agenda-skip-scheduled-repeats-after-deadline t
         org-agenda-persistent-marks t
         org-agenda-prefer-last-repeat t
         org-todo-repeat-to-state t
@@ -108,14 +124,12 @@
   (list keys name
         (list jmb/org-agenda-base-agenda
               (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+TODAY" tags-todo-str) "Today")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_WEEK" tags-todo-str) "This Week")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_MONTH" tags-todo-str) "This Month")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_QUARTER" tags-todo-str) "This Quarter")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_YEAR" tags-todo-str) "This Year")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+SOMETIME" tags-todo-str) "Sometime")
+              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_WEEK-TODAY" tags-todo-str) "This Week")
+              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_QUARTER-TODAY-THIS_WEEK" tags-todo-str) "This Quarter")
+              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"-THIS_QUARTER-TODAY-THIS_WEEK-THIS_QUARTER" tags-todo-str) "Sometime")
               (jmb/build-org-agenda-base-todo (concat "TODO=\"WAIT\"" tags-todo-str) "Waiting")
               (jmb/build-org-agenda-base-todo (concat "TODO=\"HOLD\"" tags-todo-str) "On Hold"))
-	  '((org-agenda-span 1))))
+          '((org-agenda-span 1))))
 
 
 (defvar jmb/org-agenda-custom-agenda-command
@@ -127,25 +141,11 @@
 (with-eval-after-load 'org
   (setq-default org-agenda-custom-commands
         (list (jmb/build-org-agenda-custom-command "a" "All")
-              (jmb/build-org-agenda-custom-command "w" "Work" "+Client={.+}"))))
+              (jmb/build-org-agenda-custom-command "w" "Work" "+CATEGORY=\"work\""))))
 
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Org Styling
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(with-eval-after-load 'org
-  (setq-default org-edit-src-content-indentation 4)
-  (let ((scale 1.15))
-    (set-face-attribute 'org-level-1 nil :height (expt scale 3) :weight 'medium :slant 'normal)
-    (set-face-attribute 'org-level-2 nil :height (expt scale 3) :weight 'medium :slant 'oblique)
-    (set-face-attribute 'org-level-3 nil :height (expt scale 2) :weight 'medium :slant 'normal)
-    (set-face-attribute 'org-level-4 nil :height (expt scale 2) :weight 'medium :slant 'oblique)
-    (set-face-attribute 'org-level-5 nil :height (expt scale 1) :weight 'medium :slant 'normal)
-    (set-face-attribute 'org-level-6 nil :height (expt scale 1) :weight 'medium :slant 'oblique)
-    (set-face-attribute 'org-level-7 nil :height (expt scale 0) :weight 'medium :slant 'normal)
-    (set-face-attribute 'org-level-8 nil :height (expt scale 0) :weight 'medium :slant 'oblique))
-  (add-hook 'org-mode-hook #'org-indent-mode))
+
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -174,5 +174,5 @@
 (define-key global-map (kbd "C-c o") jmb/org-global-prefix-map)
 
 
-(provide 'config-org)
-;;; config-org.el ends here
+(provide 'config-agenda)
+;;; config-agenda.el ends here

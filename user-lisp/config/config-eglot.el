@@ -3,6 +3,8 @@
 ;;; Code:
 
 (use-package eglot
+  :hook
+  ((typescript-ts-mode . eglot-ensure))
   :ensure t
   :custom
   (eglot-code-action-indications nil)

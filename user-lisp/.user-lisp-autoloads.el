@@ -48,6 +48,23 @@
 
 (register-definition-prefixes "config/config-org" '("JMB/ORG-" "jmb/"))
 
+
+
+;;; Generated autoloads from config/config-agent-shell.el
+
+(register-definition-prefixes "config/config-agent-shell" '("my-agent-shell--codex-acp-auth-method-compat"))
+
+
+;;; Generated autoloads from config/config-agenda.el
+
+(register-definition-prefixes "config/config-agenda" '("JMB/ORG-" "jmb/"))
+
+
+
+;;; Generated autoloads from config/config-llm.el
+
+(register-definition-prefixes "config/config-llm" '("jmb/llm-global-prefix-map" "my-agent-shell--codex-acp-auth-method-compat"))
+
 
 ;;; End of scraped data
 

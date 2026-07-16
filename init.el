@@ -1,5 +1,10 @@
 ;; -*- lexical-binding: t; -*-
 ;; Package Setup
+(add-to-list 'load-path (locate-user-emacs-file "user-lisp/config"))
+(add-to-list 'load-path (locate-user-emacs-file "user-lisp/lang"))
+(add-to-list 'load-path (locate-user-emacs-file "user-lisp/minor-modes"))
+(add-to-list 'load-path (locate-user-emacs-file "user-lisp/packages"))
+
 (use-package emacs
   :custom
   (use-package-always-ensure t)
@@ -20,19 +25,20 @@
   :custom
   (custom-file (locate-user-emacs-file "custom-vars.el"))
   :config
-  (load custom-file 'noerror 'nomessage))
+  (load custom-file 'noerror 'nomessage)
+  (setq auth-sources '("~/.authinfo.gpg")))
 
 (use-package emacs
   :config
-  (load-theme 'modus-operandi-deuteranopia)
-  (fido-vertical-mode)
+  (load-theme 'modus-operandi-tinted)
   (set-frame-font "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-16-*-*-*-m-0-iso10646-1")
   ;; (custom-set-faces '(variable-pitch ((t (:family "iMWritingMono Nerd Font")))))
   ;; (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
   (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
   ;; (custom-set-faces '(variable-pitch ((t (:family "AnonymousPro Nerd Font")))))
   ;; (custom-set-faces '(variable-pitch ((t (:family "LiterationSerif Nerd Font")))))
-  (add-hook 'org-mode-hook 'variable-pitch-mode))
+  (add-hook 'org-mode-hook 'variable-pitch-mode)
+  (add-hook 'markdown-mode-hook 'variable-pitch-mode))
 
 
 
@@ -48,6 +54,7 @@
   :hook
   ((prog-mode text-mode help-mode org-agenda-mode).  #'hl-line-mode)
   ((prog-mode text-mode help-mode org-agenda-mode).  #'visual-line-mode)
+  ((prog-mode).  #'display-line-numbers-mode)
   :custom
   (menu-bar-mode nil)
   (scroll-bar-mode nil)
@@ -106,7 +113,7 @@
 (use-package emacs
   :custom
   (native-comp-async-report-warnings-errors 'silent)
-  ;; (warning-minimum-level :error)
+  (warning-minimum-level :error)
   )
 
 ;; Recovery
@@ -162,16 +169,6 @@
   (prog-mode . whitespace-mode))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; ORG
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(require 'config-org)
-(require 'config-completion)
-(require 'config-eglot)
-(require 'config-web-mode)
-
-(require 'lang-liquid)
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; BBDB
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (use-package bbdb
@@ -183,3 +180,31 @@
 (use-package emacs
   :custom
   (initial-scratch-message nil))
+
+
+(defun cc/markdown-to-org-region (start end)
+  "Convert Markdown formatted text in region (START, END) to Org.
+
+This command requires that pandoc (man page `pandoc(1)') be
+installed."
+  (interactive "r")
+  (shell-command-on-region
+   start end
+   "pandoc -f markdown -t org --wrap=preserve" t t))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; User Lisp
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(require 'config-agenda)
+(require 'config-completion)
+(require 'config-eglot)
+(require 'config-web-mode)
+(require 'config-llm)
+(require 'config-magit)
+(require 'config-treesit)
+(require 'config-which-key)
+
+(require 'lang-liquid)
+(require 'lang-markdown)
+(require 'lang-org)

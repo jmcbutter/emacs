@@ -2,7 +2,9 @@
 ;;; Commentary:
 ;;; Code:
 
-(use-package typescript-ts-mode)
+(use-package typescript-ts-mode
+  :init
+  (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode)))
 
 
 (provide 'lang-typescript)
