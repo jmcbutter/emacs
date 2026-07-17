@@ -37,6 +37,7 @@
    (agent-shell-openai-make-codex-config)))
 
 (use-package gptel
+  :ensure t
   :config
   (with-eval-after-load 'gptel-openai-oauth
     (defun my/gptel-openai-oauth-authorization-url-fixed
@@ -99,10 +100,13 @@ will encode it exactly once."
      :override
      #'my/gptel-openai-oauth-login-with-authorization-code-fixed))
 
-  (gptel-make-openai-oauth "OpenAI-sub") ;Any name of your choosing
   (setq gptel-model 'gpt-5.5
         gptel-backend (gptel-make-openai-oauth "OpenAI-sub")))
 
+(use-package codex-ide
+  :ensure t
+  :vc (:url "https://github.com/dgillis/emacs-codex-ide" :rev :newest)
+  :bind ("C-c C-;" . codex-ide-menu))
 
 
 (defvar jmb/llm-global-prefix-map (make-sparse-keymap)

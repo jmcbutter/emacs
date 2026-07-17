@@ -15,6 +15,15 @@
      ("account" "%(binary) -f %(ledger-file) reg %(account)")))
  '(org-agenda-files nil)
  '(org-directory "~/Dropbox/Documents/")
+ '(package-selected-packages
+   '(agent-shell-sidebar bbdb clipetty codex-ide corfu
+                         exec-path-from-shell forge ghostel gptel
+                         magit markdown-mode org-edna vundo web-mode
+                         xclip))
+ '(package-vc-selected-packages
+   '((codex-ide :url "https://github.com/dgillis/emacs-codex-ide")
+     (agent-shell-knockknock :url
+                             "https://github.com/xenodium/agent-shell-knockknock")))
  '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")
  '(plantuml-jar-path "~/bin/plantuml-gplv2-1.2026.2.jar")

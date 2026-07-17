@@ -3,6 +3,7 @@
 ;;; Code:
 
 (use-package markdown-mode
+  :ensure t
   :config
   (let ((scale 1.15))
     (set-face-attribute 'markdown-header-face-1 nil :height (expt scale 3) :weight 'medium :slant 'normal)

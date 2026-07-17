@@ -32,11 +32,7 @@
   :config
   (load-theme 'modus-operandi-tinted)
   (set-frame-font "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-16-*-*-*-m-0-iso10646-1")
-  ;; (custom-set-faces '(variable-pitch ((t (:family "iMWritingMono Nerd Font")))))
-  ;; (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
   (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
-  ;; (custom-set-faces '(variable-pitch ((t (:family "AnonymousPro Nerd Font")))))
-  ;; (custom-set-faces '(variable-pitch ((t (:family "LiterationSerif Nerd Font")))))
   (add-hook 'org-mode-hook 'variable-pitch-mode)
   (add-hook 'markdown-mode-hook 'variable-pitch-mode))
 
@@ -46,8 +42,9 @@
   :bind*
   ("M-o" . #'other-window))
 ;; Shell Vars
-;; (use-package exec-path-from-shell
-;;   :hook (after-init . exec-path-from-shell-initialize))
+(use-package exec-path-from-shell
+  :ensure t
+  :hook (after-init . exec-path-from-shell-initialize))
 
 ;; UI
 (use-package emacs
@@ -63,14 +60,7 @@
   (global-hl-line-mode nil)
   (display-fill-column-indicator-column 80)
   (whitespace-style '(face tabs tab-mark trailing))
-  (inhibit-startup-screen t)
-
-  :config
-  (load-theme 'modus-operandi)
-  (set-frame-font "Anonymous Pro 12" nil t))
-  ;; (set-frame-font "Goudy Old Style 12" nil t))
-
-
+  (inhibit-startup-screen t))
 
 ;; Editing
 (use-package emacs
@@ -90,7 +80,7 @@
 ;; Keybindings in Terminal Emacs
 (use-package emacs
   :config
-  (w32-register-hot-key [M-tab])
+  ;; (w32-register-hot-key [M-tab])
   :bind  (("M-%" . #'query-replace-regexp)
           ;; C-S-<backspace> . #'kill-whole-line
           ;; C-x C-+ #'text-scale-adjust
