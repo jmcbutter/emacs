@@ -193,6 +193,12 @@ installed."
    "pandoc -f markdown -t org --wrap=preserve" t t))
 
 
+(use-package plantuml-mode
+  :ensure t
+  :custom
+  (plantuml-jar-path "~/Src/plantuml.jar")
+  (plantuml-default-exec-mode 'jar))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; User Lisp
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

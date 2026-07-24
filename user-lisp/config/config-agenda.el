@@ -7,10 +7,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Global Variables
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defvar JMB/ORG-DIRECTORY (expand-file-name "Org" "~/"))
-(defvar JMB/ORG-INBOX-FILE (expand-file-name "inbox.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-TODOS-FILE (expand-file-name "todos.org" JMB/ORG-DIRECTORY))
-(defvar JMB/ORG-PROJECTS-FILE (expand-file-name "projects.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-DIRECTORY (expand-file-name "Org" "~/Dropbox/"))
+(defvar JMB/ORG-AGENDA-FILE (expand-file-name "agenda.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-CALENDAR-FILE (expand-file-name "calendar.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-JOURNAL-FILE (expand-file-name "journal.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-MEETINGS-FILE (expand-file-name "meetings.org" JMB/ORG-DIRECTORY))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Configuration
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -27,31 +28,21 @@
 (with-eval-after-load 'org
   (setq-default org-capture-templates
                 '(("a" "Appointment" entry
-                   (file+olp JMB/ORG-INBOX-FILE "CALENDAR")
+                   (file+olp JMB/ORG-CALENDAR-FILE "CALENDAR")
                    "* %? %^T")
                   ("c" "Clocked In Task" item
                    (clock)
                    "- %?"
                    :clock-keep t
                    :unnarrowed t)
-                  ("r" "Routine" entry
-                   (file+olp JMB/ORG-INBOX-FILE "ROUTINES")
-                   "* TODO %?")                  
-                  ("p" "Project" entry
-                   (file+olp JMB/ORG-INBOX-FILE "ONGOING PROJECTS")
-                   "* PROJECT %?")
-                  ("t" "Todo")
-                  ("tt" "Today" entry
-                   (file+olp JMB/ORG-INBOX-FILE "TODAY")
-                   "* TODO %?")
-                  ("tw" "This Week" entry
-                   (file+olp JMB/ORG-INBOX-FILE "THIS WEEK")
-                   "* TODO %?")
-                  ("tq" "This Quarter" entry
-                   (file+olp JMB/ORG-INBOX-FILE "THIS QUARTER")
-                   "* TODO %?")
-                  ("ts" "Sometime" entry
-                   (file+olp JMB/ORG-INBOX-FILE "SOMETIME")
+                  ("j" "Journal" entry
+                   (file+datetree JMB/ORG-JOURNAL-FILE)
+                   "* %?" :tree-type (year quarter month week day))
+                  ("m" "Meeting" entry
+                   (file+datetree JMB/ORG-MEETINGS-FILE)
+                   "* %?" :tree-type (year quarter month week day))
+                  ("t" "Task" entry
+                   (file+olp JMB/ORG-AGENDA-FILE "INBOX")
                    "* TODO %?")
                   ("w"
                    "Website"
@@ -65,46 +56,48 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (with-eval-after-load 'org
   (setq-default org-agenda-show-future-repeats nil
-        org-priority-highest ?A
-        org-priority-lowest ?E
-        org-priority-default ?D
-        org-habit-graph-column 120
-        org-agenda-show-all-dates t
-        org-agenda-skip-deadline-if-done t
-        org-agenda-skip-scheduled-if-done t
-        org-agenda-skip-deadline-prewarning-if-scheduled nil
-        org-agenda-skip-scheduled-if-deadline-is-shown t
-        org-agenda-skip-scheduled-repeats-after-deadline t
-        org-agenda-persistent-marks t
-        org-agenda-prefer-last-repeat t
-        org-todo-repeat-to-state t
-        org-agenda-todo-ignore-deadlines nil
-        org-agenda-todo-ignore-scheduled 'future
-        org-agenda-todo-ignore-timestamp nil
-        org-agenda-deadline-leaders '("DUE: " "DUE IN %d DAYS: " "OVERDUE BY %d DAYS: ")
-        org-agenda-scheduled-leaders '("TODAY: " "TODAY: ")
-        org-agenda-fontify-priorities t
-        org-agenda-restore-windows-after-quit t
-        org-agenda-window-setup 'current-window
-        org-agenda-dim-blocked-tasks t
-        org-agenda-prefix-format '((agenda . " %i %-20:c%?-12t% s") (todo . " %i %-20:c")
-                                   (tags . " %i %-20:c") (search . " %i %-20:c"))
-        org-agenda-sorting-strategy '((agenda
-                                       time-up
-                                       priority-down
-                                       deadline-down
-                                       scheduled-down
-                                       urgency-down
-                                       habit-down
-                                       category-keep)
-                                      (todo
-                                       urgency-down
-                                       category-keep)
-                                      (tags
-                                       urgency-down
-                                       category-keep)
-                                      (search
-                                       category-keep))))
+                org-agenda-compact-blocks t
+                org-agenda-block-separator ?-
+                org-priority-highest ?A
+                org-priority-lowest ?E
+                org-priority-default ?D
+                org-habit-graph-column 120
+                org-agenda-show-all-dates t
+                org-agenda-skip-deadline-if-done t
+                org-agenda-skip-scheduled-if-done t
+                org-agenda-skip-deadline-prewarning-if-scheduled nil
+                org-agenda-skip-scheduled-if-deadline-is-shown t
+                org-agenda-skip-scheduled-repeats-after-deadline t
+                org-agenda-persistent-marks t
+                org-agenda-prefer-last-repeat t
+                org-todo-repeat-to-state t
+                org-agenda-todo-ignore-deadlines nil
+                org-agenda-todo-ignore-scheduled 'future
+                org-agenda-todo-ignore-timestamp nil
+                org-agenda-deadline-leaders '("DUE: " "DUE IN %d DAYS: " "OVERDUE BY %d DAYS: ")
+                org-agenda-scheduled-leaders '("TODAY: " "TODAY: ")
+                org-agenda-fontify-priorities t
+                org-agenda-restore-windows-after-quit t
+                org-agenda-window-setup 'current-window
+                org-agenda-dim-blocked-tasks t
+                org-agenda-prefix-format '((agenda . " %i %-20:c%?-12t% s") (todo . " %i %-20:c")
+                                           (tags . " %i %-20:c") (search . " %i %-20:c"))
+                org-agenda-sorting-strategy '((agenda
+                                               time-up
+                                               priority-down
+                                               deadline-down
+                                               scheduled-down
+                                               urgency-down
+                                               habit-down
+                                               category-keep)
+                                              (todo
+                                               urgency-down
+                                               category-keep)
+                                              (tags
+                                               urgency-down
+                                               category-keep)
+                                              (search
+                                               category-keep))))
 
 ;;; Org Agenda Custom Commands
 (defcustom jmb/org-agenda-base-agenda
@@ -118,28 +111,31 @@
               ((org-agenda-overriding-header ,header))))
 
 
-(defun jmb/build-org-agenda-custom-command (keys name &optional tags-todo-str)
-  (list keys name
-        (list jmb/org-agenda-base-agenda
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+TODAY" tags-todo-str) "Today")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_WEEK-TODAY" tags-todo-str) "This Week")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"+THIS_QUARTER-TODAY-THIS_WEEK" tags-todo-str) "This Quarter")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"TODO\"-THIS_QUARTER-TODAY-THIS_WEEK-THIS_QUARTER" tags-todo-str) "Sometime")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"WAIT\"" tags-todo-str) "Waiting")
-              (jmb/build-org-agenda-base-todo (concat "TODO=\"HOLD\"" tags-todo-str) "On Hold"))
-          '((org-agenda-span 1))))
-
-
-(defvar jmb/org-agenda-custom-agenda-command
-  '("a" "Agenda"
-    ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo '("WAIT" "HOLD")))
-                (org-agenda-span 1))))))
-
 
 (with-eval-after-load 'org
   (setq-default org-agenda-custom-commands
-        (list (jmb/build-org-agenda-custom-command "a" "All")
-              (jmb/build-org-agenda-custom-command "w" "Work" "+CATEGORY=\"work\""))))
+                '(("a" "All"
+                   ((agenda "" ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo '("WAIT" "HOLD"))))
+                            (org-agenda-span 1))
+                    (tags-todo "+INBOX"
+                               ((org-agenda-overriding-header "--- Inbox ---")))
+                    (tags-todo "+WAIT"
+                               ((org-agenda-overriding-header "--- Wait ---")))
+                    (tags-todo "+TODAY-PAUSE"
+                               ((org-agenda-overriding-header "--- Today ---")))
+                    (tags-todo "+THIS_WEEK-TODAY-PAUSE"
+                               ((org-agenda-overriding-header "--- This Week ---")))
+                    (tags-todo "+THIS_MONTH-THIS_WEEK-PAUSE"
+                               ((org-agenda-overriding-header "--- This Month ---")))
+                    (tags-todo "+THIS_QUARTER-THIS_MONTH-PAUSE"
+                               ((org-agenda-overriding-header "--- This Quarter ---")))
+                    (tags-todo "+THIS_YEAR-THIS_QUARTER-PAUSE"
+                               ((org-agenda-overriding-header "--- This Year ---")))
+                    (tags-todo "-THIS_YEAR-INBOX-PAUSE"
+                               ((org-agenda-overriding-header "--- Sometime ---")))
+                    (tags-todo "+HOLD"
+                               ((org-agenda-overriding-header "--- On Hold ---"))))
+                   ((org-agenda-span 1))))))
 
 
 

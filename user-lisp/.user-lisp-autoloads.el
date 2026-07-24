@@ -59,7 +59,6 @@
 
 (register-definition-prefixes "config/config-agenda" '("JMB/ORG-" "jmb/"))
 
-
 
 ;;; Generated autoloads from config/config-llm.el
 

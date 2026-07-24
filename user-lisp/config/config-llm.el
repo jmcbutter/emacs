@@ -16,6 +16,9 @@
 
 (use-package agent-shell
   :ensure t
+  :custom
+  (agent-shell-header-style 'text)
+  (agent-shell-preferred-agent-config 'codex)
   :config
   (with-eval-after-load 'acp
     (unless (advice-member-p #'my-agent-shell--codex-acp-auth-method-compat
@@ -26,15 +29,6 @@
 
   (setq agent-shell-openai-authentication
         (agent-shell-openai-make-authentication :login t)))
-
-(use-package agent-shell-sidebar
-  :after agent-shell
-  :vc (:url "https://github.com/cmacrae/agent-shell-sidebar")
-  :custom
-  (agent-shell-sidebar-position 'right)
-  (agent-shell-sidebar-locked t)
-  (agent-shell-sidebar-default-config
-   (agent-shell-openai-make-codex-config)))
 
 (use-package gptel
   :ensure t
@@ -111,9 +105,31 @@ will encode it exactly once."
 
 (defvar jmb/llm-global-prefix-map (make-sparse-keymap)
   "A keymap for handy global access to org helpers, particularly clocking.")
-(define-key jmb/llm-global-prefix-map (kbd "c") 'agent-shell-sidebar-toggle-focus)
-(define-key jmb/llm-global-prefix-map (kbd "f") 'agent-shell-sidebar-toggle-focus)
-(define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-sidebar-toggle)
+(define-key jmb/llm-global-prefix-map (kbd "a") 'agent-shell)
+(define-key jmb/llm-global-prefix-map (kbd "c") 'gptel)
+(define-key jmb/llm-global-prefix-map (kbd "t") 'agent-shell-toggle)
+(define-key jmb/llm-global-prefix-map (kbd "r") 'gptel-rewrite)
+(define-key jmb/llm-global-prefix-map (kbd "s") 'gptel-send)
+(define-key jmb/llm-global-prefix-map (kbd "+") 'gptel-add)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-help-menu)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-insert-file)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-insert-shell-command-output)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-jump-to-latest-permission-button-row)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-next-permission-button)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-open-transcript)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-previous-permission-button)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-queue-request)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-remove-pending-request)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-current-file)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-file)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-other-file)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-dwim)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-region)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-send-screenshot)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-toggle-logging)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-viewport-refresh)
+;; (define-key jmb/llm-global-prefix-map (kbd "s") 'agent-shell-viewport-reply)
+
 
 (define-key global-map (kbd "C-c a") jmb/llm-global-prefix-map)
 

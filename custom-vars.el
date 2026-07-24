@@ -18,8 +18,8 @@
  '(package-selected-packages
    '(agent-shell-sidebar bbdb clipetty codex-ide corfu
                          exec-path-from-shell forge ghostel gptel
-                         magit markdown-mode org-edna vundo web-mode
-                         xclip))
+                         magit markdown-mode org-edna plantuml-mode
+                         vundo web-mode xclip))
  '(package-vc-selected-packages
    '((codex-ide :url "https://github.com/dgillis/emacs-codex-ide")
      (agent-shell-knockknock :url
