@@ -26,7 +26,8 @@
   (custom-file (locate-user-emacs-file "custom-vars.el"))
   :config
   (load custom-file 'noerror 'nomessage)
-  (setq auth-sources '("~/.authinfo.gpg")))
+  (setq auth-sources '("~/.authinfo.gpg"))
+  (setq epa-pinentry-mode 'loopback))
 
 (use-package emacs
   :config
@@ -201,6 +202,11 @@ installed."
 
 (use-package xclip
   :ensure t)
+
+(use-package clipetty
+  :ensure t
+  :config
+  (global-clipetty-mode 1))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; User Lisp

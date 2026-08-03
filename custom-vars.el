@@ -16,7 +16,7 @@
  '(org-agenda-files nil)
  '(org-directory "~/Dropbox/Documents/")
  '(package-selected-packages
-   '(agent-shell-sidebar bbdb clipetty codex-ide corfu
+   '(agent-shell-sidebar bbdb clipetty codex-ide corfu eglot-java
                          exec-path-from-shell forge ghostel gptel
                          magit markdown-mode org-edna plantuml-mode
                          vundo web-mode xclip))
@@ -24,9 +24,7 @@
    '((codex-ide :url "https://github.com/dgillis/emacs-codex-ide")
      (agent-shell-knockknock :url
                              "https://github.com/xenodium/agent-shell-knockknock")))
- '(plantuml-default-exec-mode 'jar)
  '(plantuml-executable-path "\"plantuml\"")
- '(plantuml-jar-path "~/bin/plantuml-gplv2-1.2026.2.jar")
  '(safe-local-variable-values
    '((org-anki-default-note-type . "Cloze") (org-anki-inherit-tags)))
  '(treesit-font-lock-level 4))
