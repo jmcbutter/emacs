@@ -7,7 +7,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Global Variables
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defvar JMB/ORG-DIRECTORY (expand-file-name "Org" "~/Dropbox/"))
+(defvar JMB/ORG-DIRECTORY (expand-file-name "Agenda" "~/Dropbox/"))
 (defvar JMB/ORG-AGENDA-FILE (expand-file-name "agenda.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-CALENDAR-FILE (expand-file-name "calendar.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-JOURNAL-FILE (expand-file-name "journal.org" JMB/ORG-DIRECTORY))

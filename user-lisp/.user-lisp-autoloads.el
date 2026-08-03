@@ -64,6 +64,32 @@
 
 (register-definition-prefixes "config/config-llm" '("jmb/llm-global-prefix-map" "my-agent-shell--codex-acp-auth-method-compat"))
 
+
+
+;;; Generated autoloads from packages/jmb-org-workflow.el
+
+(autoload 'jmb/org-workflow-setup "packages/jmb-org-workflow"
+"Configure Org capture, states, agenda, and key bindings." t)
+(autoload 'jmb/org-workflow-agenda "packages/jmb-org-workflow"
+"Open the workflow agenda." t)
+(autoload 'jmb/org-workflow-advance "packages/jmb-org-workflow"
+"Choose a valid next state for the current workflow entry." t)
+(autoload 'jmb/org-workflow-triage "packages/jmb-org-workflow"
+"Clarify, categorize, and deduplicate the current entry." t)
+(autoload 'jmb/org-workflow-mark-contacted "packages/jmb-org-workflow"
+"Record that responsible parties were contacted and wait for a response." t)
+(autoload 'jmb/org-workflow-group-ticket "packages/jmb-org-workflow"
+"Assign the current ticket to a worktree group." t)
+(autoload 'jmb/org-workflow-dispatch "packages/jmb-org-workflow"
+"Apply the urgent/needs-you decision matrix to the current ticket." t)
+(autoload 'jmb/org-workflow-provision-worktree "packages/jmb-org-workflow"
+"Provision a worktree and tmux session for the current NEXT ticket." t)
+(autoload 'jmb/org-workflow-set-dev-port "packages/jmb-org-workflow"
+"Prefix the current ticket's tmux session with its development port." t)
+(autoload 'jmb/org-workflow-archive "packages/jmb-org-workflow"
+"Archive the current DONE or CANCELLED workflow entry." t)
+(register-definition-prefixes "packages/jmb-org-workflow" '("jmb/org-workflow-"))
+
 
 ;;; End of scraped data
 

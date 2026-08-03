@@ -199,6 +199,9 @@ installed."
   (plantuml-jar-path "~/Src/plantuml.jar")
   (plantuml-default-exec-mode 'jar))
 
+(use-package xclip
+  :ensure t)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; User Lisp
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
