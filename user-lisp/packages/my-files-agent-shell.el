@@ -16,7 +16,8 @@
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel shows live `agent-shell'
-;; buffers whose working directories belong to the selected project.
+;; buffers whose working directories belong to the selected project.  Saved
+;; transcripts are also listed and can resume their original ACP sessions.
 
 ;;; Code:
 
@@ -116,8 +117,11 @@ discovery quick."
 (defvar-local my-files-agent-shell--subscribed nil)
 
 (declare-function agent-shell-buffers "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
+(declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell-status "agent-shell")
 (declare-function agent-shell-subscribe-to "agent-shell")
+(declare-function agent-shell--resolved-agent-configs "agent-shell")
 (defvar agent-shell--state)
 
 (defvar-keymap my-files-agent-shell-mode-map
@@ -168,12 +172,14 @@ discovery quick."
     (unless (file-directory-p root)
       (user-error "My Files root does not exist: %s" root))
     (sort
-     (seq-filter
-      (lambda (entry)
-        (and (file-directory-p entry)
-             (file-regular-p
-              (expand-file-name my-files-agent-shell-area-marker entry))))
-      (directory-files root t directory-files-no-dot-files-regexp t))
+     (mapcar
+      #'my-files-agent-shell--canonical-directory
+      (seq-filter
+       (lambda (entry)
+         (and (file-directory-p entry)
+              (file-regular-p
+               (expand-file-name my-files-agent-shell-area-marker entry))))
+       (directory-files root t directory-files-no-dot-files-regexp t)))
      (lambda (left right)
        (my-files-agent-shell--path-less-p
         (my-files-agent-shell--path-name left)
@@ -224,6 +230,84 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
                             (file-in-directory-p chat-root project-root)))
                     (file-error nil))))))
        (or buffers (agent-shell-buffers))))))
+
+(defun my-files-agent-shell--live-session-id (buffer)
+  "Return the agent session ID associated with live BUFFER."
+  (with-current-buffer buffer
+    (and (boundp 'agent-shell--state)
+         (or (map-nested-elt agent-shell--state '(:session :id))
+             (map-elt agent-shell--state :resume-session-id)))))
+
+(defun my-files-agent-shell--transcript-field (label)
+  "Return the value of bold transcript header field LABEL at point."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           (format "^\\*\\*%s:\\*\\*[ \\t]+\\(.+\\)$"
+                   (regexp-quote label))
+           nil t)
+      (string-trim (match-string-no-properties 1)))))
+
+(defun my-files-agent-shell--transcript-title ()
+  "Return a saved transcript's first non-empty user-prompt line."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^## User\\(?: ([^)]+)\\)?[ \\t]*$" nil t)
+      (forward-line 1)
+      (while (and (not (eobp))
+                  (looking-at-p "^[ \\t]*$"))
+        (forward-line 1))
+      (unless (eobp)
+        (truncate-string-to-width
+         (string-trim
+          (buffer-substring-no-properties
+           (line-beginning-position) (line-end-position)))
+         80 nil nil "…")))))
+
+(defun my-files-agent-shell--read-transcript (file project)
+  "Return saved chat metadata parsed from transcript FILE in PROJECT."
+  (with-temp-buffer
+    ;; Session metadata and the first prompt are near the start.  Bounding the
+    ;; read keeps a long tool-heavy transcript from delaying panel refreshes.
+    (insert-file-contents file nil 0 65536)
+    (when-let* ((session-id
+                 (my-files-agent-shell--transcript-field "Session ID")))
+      (list :session-id session-id
+            :agent (my-files-agent-shell--transcript-field "Agent")
+            :started (my-files-agent-shell--transcript-field "Started")
+            :title (or (my-files-agent-shell--transcript-title)
+                       (file-name-base file))
+            :transcript file
+            :project project
+            :modified
+            (float-time
+             (file-attribute-modification-time (file-attributes file)))))))
+
+(defun my-files-agent-shell--discover-saved-chats (project live-session-ids)
+  "Return saved PROJECT chats, excluding LIVE-SESSION-IDS and duplicates."
+  (let ((directory (expand-file-name ".agent-shell/transcripts" project))
+        entries
+        (seen (make-hash-table :test #'equal)))
+    (when (file-directory-p directory)
+      (dolist (file (directory-files directory t "\\.md\\'" t))
+        (when-let* ((entry
+                     (condition-case nil
+                         (my-files-agent-shell--read-transcript file project)
+                       (file-error nil))))
+          (push entry entries)))
+      (setq entries
+            (sort entries
+                  (lambda (left right)
+                    (> (plist-get left :modified)
+                       (plist-get right :modified)))))
+      (seq-filter
+       (lambda (entry)
+         (let ((session-id (plist-get entry :session-id)))
+           (when (and (not (member session-id live-session-ids))
+                      (not (gethash session-id seen)))
+             (puthash session-id t seen)
+             t)))
+       entries))))
 
 (defun my-files-agent-shell--visible-p ()
   "Return non-nil when all browser panel windows are live."
@@ -322,6 +406,40 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
     (set-window-buffer my-files-agent-shell--main-window buffer)
     (select-window my-files-agent-shell--main-window)))
 
+(defun my-files-agent-shell--agent-config (agent-name)
+  "Return the installed agent-shell config matching AGENT-NAME."
+  (when agent-name
+    (seq-find
+     (lambda (config)
+       (seq-some
+        (lambda (key)
+          (when-let* ((value (map-elt config key)))
+            (string-equal-ignore-case agent-name (format "%s" value))))
+        '(:mode-line-name :buffer-name :identifier)))
+     (ignore-errors (agent-shell--resolved-agent-configs)))))
+
+(defun my-files-agent-shell--resume-chat (button)
+  "Resume the saved agent-shell session represented by BUTTON."
+  (unless (window-live-p my-files-agent-shell--main-window)
+    (user-error "The My Files main window is no longer available"))
+  (let* ((entry (button-get button 'my-files-agent-shell-entry))
+         (session-id (plist-get entry :session-id))
+         (config (my-files-agent-shell--agent-config
+                  (plist-get entry :agent)))
+         (default-directory (plist-get entry :project))
+         (buffer
+          (with-selected-window my-files-agent-shell--main-window
+            (if config
+                (agent-shell-start :config config :session-id session-id)
+              ;; Avoid silently resuming with a preferred agent that differs
+              ;; from the transcript.  Let agent-shell ask when no match exists.
+              (let ((agent-shell-preferred-agent-config nil))
+                (agent-shell-resume-session session-id))))))
+    (when (buffer-live-p buffer)
+      (set-window-buffer my-files-agent-shell--main-window buffer)
+      (select-window my-files-agent-shell--main-window))
+    (my-files-agent-shell--schedule-refresh)))
+
 (defun my-files-agent-shell--new-chat (_button)
   "Start a new agent-shell chat for the selected project."
   (unless my-files-agent-shell--selected-project
@@ -390,8 +508,30 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
            "Select an area")))
       (goto-char (point-min)))))
 
-(defun my-files-agent-shell--render-chats (chats)
-  "Render the agent chat panel using CHATS."
+(defun my-files-agent-shell--insert-saved-chat-button (entry)
+  "Insert a button that resumes saved chat ENTRY."
+  (let ((title (plist-get entry :title))
+        (agent (or (plist-get entry :agent) "Agent"))
+        (started (plist-get entry :started)))
+    (insert " ")
+    (insert-text-button
+     (format "%-8s %s" "[saved]" title)
+     'action #'my-files-agent-shell--resume-chat
+     'my-files-agent-shell-entry entry
+     'follow-link t
+     'help-echo (format "Resume %s session%s"
+                        agent
+                        (if started (format " from %s" started) ""))
+     'face 'default)
+    (insert "\n")))
+
+(defun my-files-agent-shell--insert-chat-section (title)
+  "Insert chat section heading TITLE."
+  (insert (propertize (concat " " title "\n")
+                      'face 'my-files-agent-shell-muted)))
+
+(defun my-files-agent-shell--render-chat-lists (chats saved-chats)
+  "Render the agent chat panel using live CHATS and SAVED-CHATS."
   (with-current-buffer
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--chat-buffer-name
@@ -409,11 +549,18 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
              'help-echo "Start a new agent-shell chat for this project"
              'face 'font-lock-keyword-face)
             (insert "\n\n")
-            (if chats
-                (dolist (chat chats)
-                  (my-files-agent-shell--subscribe-chat chat)
-                  (my-files-agent-shell--insert-chat-button chat))
-              (my-files-agent-shell--insert-empty "No open chats")))
+            (when chats
+              (my-files-agent-shell--insert-chat-section "OPEN")
+              (dolist (chat chats)
+                (my-files-agent-shell--subscribe-chat chat)
+                (my-files-agent-shell--insert-chat-button chat))
+              (insert "\n"))
+            (when saved-chats
+              (my-files-agent-shell--insert-chat-section "HISTORY")
+              (dolist (entry saved-chats)
+                (my-files-agent-shell--insert-saved-chat-button entry)))
+            (unless (or chats saved-chats)
+              (my-files-agent-shell--insert-empty "No chats yet")))
         (my-files-agent-shell--insert-empty "Select a project"))
       (goto-char (point-min)))))
 
@@ -442,12 +589,18 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
                   projects))))
       (setq my-files-agent-shell--selected-project
             (or selected-project (car projects)))
-      (let ((chats
-             (my-files-agent-shell--project-chat-buffers
-              my-files-agent-shell--selected-project)))
+      (let* ((chats
+              (my-files-agent-shell--project-chat-buffers
+               my-files-agent-shell--selected-project))
+             (saved-chats
+              (and my-files-agent-shell--selected-project
+                   (my-files-agent-shell--discover-saved-chats
+                    my-files-agent-shell--selected-project
+                    (delq nil (mapcar #'my-files-agent-shell--live-session-id
+                                      chats))))))
         (my-files-agent-shell--render-areas areas)
         (my-files-agent-shell--render-projects projects)
-        (my-files-agent-shell--render-chats chats)))))
+        (my-files-agent-shell--render-chat-lists chats saved-chats)))))
 
 (defun my-files-agent-shell--schedule-refresh (&rest _ignored)
   "Schedule a browser refresh after current buffer activity settles."

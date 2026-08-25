@@ -72,6 +72,38 @@
         (mapc #'kill-buffer
               (list project-buffer nested-buffer other-buffer))))))
 
+(ert-deftest my-files-agent-shell-discovers-resumable-transcript-history ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((project (expand-file-name "Work/Project" root))
+           (transcripts (expand-file-name ".agent-shell/transcripts" project))
+           (saved-file (expand-file-name "saved.md" transcripts))
+           (live-file (expand-file-name "live.md" transcripts)))
+      (make-directory transcripts t)
+      (write-region
+       (concat "# Agent Shell Transcript\n\n"
+               "**Agent:** Codex\n"
+               "**Started:** 2026-08-24 16:18:34\n"
+               "**Working Directory:** " project "/\n"
+               "**Session ID:** saved-session\n\n---\n\n"
+               "## User (2026-08-24 16:18:34)\n\n"
+               "Build the area and project browser.\n")
+       nil saved-file nil 'silent)
+      (write-region
+       (concat "# Agent Shell Transcript\n\n"
+               "**Agent:** Codex\n"
+               "**Session ID:** live-session\n\n---\n\n"
+               "## User\n\nAlready open.\n")
+       nil live-file nil 'silent)
+      (let ((entries
+             (my-files-agent-shell--discover-saved-chats
+              project '("live-session"))))
+        (should (= (length entries) 1))
+        (should (equal (plist-get (car entries) :session-id)
+                       "saved-session"))
+        (should (equal (plist-get (car entries) :agent) "Codex"))
+        (should (equal (plist-get (car entries) :title)
+                       "Build the area and project browser."))))))
+
 (ert-deftest my-files-agent-shell-scales-panels-to-preserve-main-window ()
   (let ((my-files-agent-shell-area-width 20)
         (my-files-agent-shell-project-width 30)
