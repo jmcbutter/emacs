@@ -30,6 +30,13 @@
   (setq agent-shell-openai-authentication
         (agent-shell-openai-make-authentication :login t)))
 
+(use-package my-files-agent-shell
+  :ensure nil
+  :after agent-shell
+  :commands (my-files-agent-shell-open
+             my-files-agent-shell-close
+             my-files-agent-shell-toggle))
+
 (use-package gptel
   :ensure t
   :config
@@ -106,6 +113,7 @@ will encode it exactly once."
 (defvar jmb/llm-global-prefix-map (make-sparse-keymap)
   "A keymap for handy global access to org helpers, particularly clocking.")
 (define-key jmb/llm-global-prefix-map (kbd "a") 'agent-shell)
+(define-key jmb/llm-global-prefix-map (kbd "b") 'my-files-agent-shell-toggle)
 (define-key jmb/llm-global-prefix-map (kbd "c") 'gptel)
 (define-key jmb/llm-global-prefix-map (kbd "t") 'agent-shell-toggle)
 (define-key jmb/llm-global-prefix-map (kbd "r") 'gptel-rewrite)
