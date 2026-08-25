@@ -15,6 +15,13 @@
            ,@body)
        (delete-directory root t))))
 
+(defun my-files-agent-shell-test--button-with-property (property value)
+  "Return the next button whose PROPERTY equals VALUE in the current buffer."
+  (let ((button (next-button (point-min))))
+    (while (and button (not (equal (button-get button property) value)))
+      (setq button (next-button (button-end button))))
+    button))
+
 (ert-deftest my-files-agent-shell-discovers-only-marked-top-level-areas ()
   (my-files-agent-shell-test--with-tree ()
     (dolist (name '("Zulu" "alpha" "Unmarked"))
@@ -103,6 +110,76 @@
         (should (equal (plist-get (car entries) :agent) "Codex"))
         (should (equal (plist-get (car entries) :title)
                        "Build the area and project browser."))))))
+
+(ert-deftest my-files-agent-shell-categorizes-live-chat-state ()
+  (let ((buffer (generate-new-buffer " chat-category")))
+    (unwind-protect
+        (dolist (case '((busy . in-progress)
+                        (blocked . in-progress)
+                        (ready . staged)
+                        (starting . in-progress)))
+          (cl-letf (((symbol-function 'agent-shell-status)
+                     (lambda (&rest _arguments) (car case))))
+            (should (eq (my-files-agent-shell--chat-category buffer)
+                        (cdr case)))))
+      (kill-buffer buffer))))
+
+(ert-deftest my-files-agent-shell-renders-collapsible-chat-categories ()
+  (let ((working (generate-new-buffer "working chat"))
+        (ready (generate-new-buffer "ready chat"))
+        (my-files-agent-shell--selected-project default-directory)
+        (saved (list (list :session-id "completed-session"
+                           :agent "Codex"
+                           :title "Completed chat"
+                           :project default-directory))))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'my-files-agent-shell--chat-status-symbol)
+                   (lambda (buffer)
+                     (if (eq buffer ready) 'ready 'busy)))
+                  ((symbol-function 'my-files-agent-shell--chat-title)
+                   #'buffer-name)
+                  ((symbol-function 'my-files-agent-shell--subscribe-chat)
+                   #'ignore))
+          (my-files-agent-shell--render-chat-lists
+           (list working ready) saved)
+          (with-current-buffer my-files-agent-shell--chat-buffer-name
+            (let* ((text (buffer-string))
+                   (in-progress-position
+                    (string-match "In Progress (1)" text))
+                   (staged-position (string-match "Staged (1)" text))
+                   (completed-position (string-match "Completed (1)" text))
+                   (in-progress-button
+                    (my-files-agent-shell-test--button-with-property
+                     'my-files-agent-shell-category 'in-progress))
+                   (body (button-get
+                          in-progress-button
+                          'my-files-agent-shell-body-overlay)))
+              (should (< in-progress-position
+                         staged-position
+                         completed-position))
+              (should in-progress-button)
+              (should-not (overlay-get body 'invisible))
+              (button-activate in-progress-button)
+              (should (memq 'in-progress
+                            my-files-agent-shell--collapsed-chat-sections))
+              (should (overlay-get body 'invisible))
+              (should (equal
+                       (get-text-property
+                        (button-start in-progress-button) 'display)
+                       "▸"))
+              (goto-char (button-start in-progress-button))
+              (my-files-agent-shell-next-item)
+              (should
+               (eq (button-get (button-at (point))
+                               'my-files-agent-shell-category)
+                   'staged))
+              (button-activate in-progress-button)
+              (should-not (memq
+                           'in-progress
+                           my-files-agent-shell--collapsed-chat-sections))
+              (should-not (overlay-get body 'invisible)))))
+      (mapc #'kill-buffer (list working ready)))))
 
 (ert-deftest my-files-agent-shell-scales-panels-to-preserve-main-window ()
   (let ((my-files-agent-shell-area-width 20)

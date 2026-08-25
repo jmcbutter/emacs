@@ -16,8 +16,9 @@
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel shows live `agent-shell'
-;; buffers whose working directories belong to the selected project.  Saved
-;; transcripts are also listed and can resume their original ACP sessions.
+;; buffers whose working directories belong to the selected project.  Busy
+;; and blocked chats are In Progress, idle live chats are Staged, and closed
+;; resumable transcripts are Completed.
 
 ;;; Code:
 
@@ -115,6 +116,13 @@ discovery quick."
 (defvar my-files-agent-shell--selected-project nil)
 (defvar my-files-agent-shell--refresh-timer nil)
 (defvar-local my-files-agent-shell--subscribed nil)
+(defvar-local my-files-agent-shell--collapsed-chat-sections nil)
+
+(defconst my-files-agent-shell--chat-sections
+  '((in-progress . "In Progress")
+    (staged . "Staged")
+    (completed . "Completed"))
+  "Chat categories in their display order.")
 
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-resume-session "agent-shell")
@@ -166,15 +174,41 @@ discovery quick."
   my-files-agent-shell-mode "Agent Chats"
   "Mode for the My Files agent-shell chat panel.")
 
+(defun my-files-agent-shell--visible-buttons ()
+  "Return visible buttons in the current buffer in display order."
+  (let ((button (next-button (point-min)))
+        buttons)
+    (while button
+      (unless (invisible-p (button-start button))
+        (push button buttons))
+      (setq button (next-button (button-end button))))
+    (nreverse buttons)))
+
+(defun my-files-agent-shell--move-item (direction)
+  "Move to the next visible item in DIRECTION, wrapping at the ends."
+  (let* ((buttons (my-files-agent-shell--visible-buttons))
+         (current (button-at (point)))
+         (position (if current (button-start current) (point)))
+         (ordered (if (> direction 0) buttons (reverse buttons)))
+         (candidate
+          (seq-find
+           (lambda (button)
+             (if (> direction 0)
+                 (> (button-start button) position)
+               (< (button-start button) position)))
+           ordered)))
+    (when-let* ((button (or candidate (car ordered))))
+      (goto-char (button-start button)))))
+
 (defun my-files-agent-shell-next-item ()
   "Move to the next actionable item, wrapping within the panel."
   (interactive)
-  (forward-button 1 t t t))
+  (my-files-agent-shell--move-item 1))
 
 (defun my-files-agent-shell-previous-item ()
   "Move to the previous actionable item, wrapping within the panel."
   (interactive)
-  (forward-button -1 t t t))
+  (my-files-agent-shell--move-item -1))
 
 (defun my-files-agent-shell--focus-window (window)
   "Select WINDOW and place point on its first actionable item."
@@ -460,12 +494,20 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
                (car (split-string (string-trim title) "\n" t)))
           (buffer-name buffer)))))
 
+(defun my-files-agent-shell--chat-status-symbol (buffer)
+  "Return the status symbol for agent-shell BUFFER."
+  (or (ignore-errors (agent-shell-status :shell-buffer buffer))
+      'starting))
+
 (defun my-files-agent-shell--chat-status (buffer)
   "Return a display status for agent-shell BUFFER."
-  (with-current-buffer buffer
-    (or (ignore-errors
-          (symbol-name (agent-shell-status :shell-buffer buffer)))
-        "starting")))
+  (symbol-name (my-files-agent-shell--chat-status-symbol buffer)))
+
+(defun my-files-agent-shell--chat-category (buffer)
+  "Return the workflow category for live agent-shell BUFFER."
+  (if (eq (my-files-agent-shell--chat-status-symbol buffer) 'ready)
+      'staged
+    'in-progress))
 
 (defun my-files-agent-shell--insert-chat-button (buffer)
   "Insert a button that opens agent-shell BUFFER."
@@ -621,10 +663,66 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'face 'default)
     (insert "\n")))
 
-(defun my-files-agent-shell--insert-chat-section (title)
-  "Insert chat section heading TITLE."
-  (insert (propertize (concat " " title "\n")
-                      'face 'my-files-agent-shell-muted)))
+(defun my-files-agent-shell--chat-section-collapsed-p (category)
+  "Return non-nil when chat CATEGORY is collapsed in this buffer."
+  (memq category my-files-agent-shell--collapsed-chat-sections))
+
+(defun my-files-agent-shell--set-chat-section-button-state
+    (button collapsed)
+  "Display BUTTON as COLLAPSED or expanded."
+  (let ((inhibit-read-only t))
+    (put-text-property (button-start button)
+                       (1+ (button-start button))
+                       'display (if collapsed "▸" "▾"))
+    (button-put button 'help-echo
+                (format "%s %s"
+                        (if collapsed "Expand" "Collapse")
+                        (button-get button 'my-files-agent-shell-title)))))
+
+(defun my-files-agent-shell--toggle-chat-section (button)
+  "Toggle the chat section represented by BUTTON."
+  (let* ((category (button-get button 'my-files-agent-shell-category))
+         (body (button-get button 'my-files-agent-shell-body-overlay))
+         (collapsed (not (overlay-get body 'invisible))))
+    (unless (overlay-buffer body)
+      (user-error "That chat section is no longer available"))
+    (overlay-put body 'invisible collapsed)
+    (if collapsed
+        (cl-pushnew category my-files-agent-shell--collapsed-chat-sections)
+      (setq my-files-agent-shell--collapsed-chat-sections
+            (delq category my-files-agent-shell--collapsed-chat-sections)))
+    (my-files-agent-shell--set-chat-section-button-state button collapsed)
+    (goto-char (button-start button))))
+
+(defun my-files-agent-shell--insert-chat-section
+    (category title count insert-items)
+  "Insert collapsible chat CATEGORY named TITLE containing COUNT items.
+
+Call INSERT-ITEMS to render the section body when COUNT is positive."
+  (let ((collapsed (my-files-agent-shell--chat-section-collapsed-p category))
+        button)
+    (insert " ")
+    (let ((button-start (point)))
+      (insert-text-button
+       (format "▾ %s (%d)" title count)
+       'action #'my-files-agent-shell--toggle-chat-section
+       'my-files-agent-shell-category category
+       'my-files-agent-shell-title title
+       'follow-link t
+       'face 'my-files-agent-shell-heading)
+      (setq button (button-at button-start)))
+    (insert "\n")
+    (let ((body-start (point)))
+      (if (> count 0)
+          (funcall insert-items)
+        (my-files-agent-shell--insert-empty "No chats"))
+      (insert "\n")
+      (let ((body (make-overlay body-start (point) nil t nil)))
+        (overlay-put body 'invisible collapsed)
+        (overlay-put body 'evaporate t)
+        (button-put button 'my-files-agent-shell-body-overlay body)
+        (my-files-agent-shell--set-chat-section-button-state
+         button collapsed)))))
 
 (defun my-files-agent-shell--render-chat-lists (chats saved-chats)
   "Render the agent chat panel using live CHATS and SAVED-CHATS."
@@ -645,18 +743,35 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
              'help-echo "Start a new agent-shell chat for this project"
              'face 'font-lock-keyword-face)
             (insert "\n\n")
-            (when chats
-              (my-files-agent-shell--insert-chat-section "OPEN")
+            (let (in-progress staged)
               (dolist (chat chats)
                 (my-files-agent-shell--subscribe-chat chat)
-                (my-files-agent-shell--insert-chat-button chat))
-              (insert "\n"))
-            (when saved-chats
-              (my-files-agent-shell--insert-chat-section "HISTORY")
-              (dolist (entry saved-chats)
-                (my-files-agent-shell--insert-saved-chat-button entry)))
-            (unless (or chats saved-chats)
-              (my-files-agent-shell--insert-empty "No chats yet")))
+                (if (eq (my-files-agent-shell--chat-category chat) 'staged)
+                    (push chat staged)
+                  (push chat in-progress)))
+              (setq in-progress (nreverse in-progress)
+                    staged (nreverse staged))
+              (dolist (section my-files-agent-shell--chat-sections)
+                (pcase (car section)
+                  ('in-progress
+                   (my-files-agent-shell--insert-chat-section
+                    'in-progress (cdr section) (length in-progress)
+                    (lambda ()
+                      (dolist (chat in-progress)
+                        (my-files-agent-shell--insert-chat-button chat)))))
+                  ('staged
+                   (my-files-agent-shell--insert-chat-section
+                    'staged (cdr section) (length staged)
+                    (lambda ()
+                      (dolist (chat staged)
+                        (my-files-agent-shell--insert-chat-button chat)))))
+                  ('completed
+                   (my-files-agent-shell--insert-chat-section
+                    'completed (cdr section) (length saved-chats)
+                    (lambda ()
+                      (dolist (entry saved-chats)
+                        (my-files-agent-shell--insert-saved-chat-button
+                         entry)))))))))
         (my-files-agent-shell--insert-empty "Select a project"))
       (goto-char (point-min)))))
 
