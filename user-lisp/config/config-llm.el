@@ -35,6 +35,7 @@
   :after agent-shell
   :commands (my-files-agent-shell-open
              my-files-agent-shell-close
+             my-files-agent-shell-focus-browser
              my-files-agent-shell-toggle))
 
 (use-package gptel
@@ -115,6 +116,7 @@ will encode it exactly once."
 (define-key jmb/llm-global-prefix-map (kbd "a") 'agent-shell)
 (define-key jmb/llm-global-prefix-map (kbd "b") 'my-files-agent-shell-toggle)
 (define-key jmb/llm-global-prefix-map (kbd "c") 'gptel)
+(define-key jmb/llm-global-prefix-map (kbd "f") 'my-files-agent-shell-focus-browser)
 (define-key jmb/llm-global-prefix-map (kbd "t") 'agent-shell-toggle)
 (define-key jmb/llm-global-prefix-map (kbd "r") 'gptel-rewrite)
 (define-key jmb/llm-global-prefix-map (kbd "s") 'gptel-send)

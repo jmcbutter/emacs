@@ -126,10 +126,22 @@ discovery quick."
 
 (defvar-keymap my-files-agent-shell-mode-map
   :doc "Keymap shared by My Files browser panels."
-  "n" #'forward-button
-  "p" #'backward-button
-  "TAB" #'forward-button
-  "<backtab>" #'backward-button
+  "n" #'my-files-agent-shell-next-item
+  "j" #'my-files-agent-shell-next-item
+  "<down>" #'my-files-agent-shell-next-item
+  "p" #'my-files-agent-shell-previous-item
+  "k" #'my-files-agent-shell-previous-item
+  "<up>" #'my-files-agent-shell-previous-item
+  "TAB" #'my-files-agent-shell-next-item
+  "<backtab>" #'my-files-agent-shell-previous-item
+  "l" #'my-files-agent-shell-next-panel
+  "<right>" #'my-files-agent-shell-next-panel
+  "h" #'my-files-agent-shell-previous-panel
+  "<left>" #'my-files-agent-shell-previous-panel
+  "1" #'my-files-agent-shell-focus-areas
+  "2" #'my-files-agent-shell-focus-projects
+  "3" #'my-files-agent-shell-focus-chats
+  "4" #'my-files-agent-shell-focus-main
   "RET" #'push-button
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
@@ -138,8 +150,7 @@ discovery quick."
   "Base mode for My Files browser panels."
   (setq-local truncate-lines t
               cursor-type nil
-              mode-line-format nil
-              window-size-fixed 'width))
+              mode-line-format nil))
 
 (define-derived-mode my-files-agent-shell-area-mode
   my-files-agent-shell-mode "Areas"
@@ -152,6 +163,80 @@ discovery quick."
 (define-derived-mode my-files-agent-shell-chat-mode
   my-files-agent-shell-mode "Agent Chats"
   "Mode for the My Files agent-shell chat panel.")
+
+(defun my-files-agent-shell-next-item ()
+  "Move to the next actionable item, wrapping within the panel."
+  (interactive)
+  (forward-button 1 t t t))
+
+(defun my-files-agent-shell-previous-item ()
+  "Move to the previous actionable item, wrapping within the panel."
+  (interactive)
+  (forward-button -1 t t t))
+
+(defun my-files-agent-shell--focus-window (window)
+  "Select WINDOW and place point on its first actionable item."
+  (unless (window-live-p window)
+    (user-error "The My Files browser is not open"))
+  (select-window window)
+  (when (window-parameter window 'my-files-agent-shell-panel)
+    (unless (button-at (point))
+      (when-let* ((button (next-button (point-min))))
+        (goto-char (button-start button))))))
+
+;;;###autoload
+(defun my-files-agent-shell-focus-browser ()
+  "Open the browser if needed, then focus its Areas panel."
+  (interactive)
+  (unless (my-files-agent-shell--visible-p)
+    (my-files-agent-shell-open))
+  (my-files-agent-shell-focus-areas))
+
+(defun my-files-agent-shell-focus-areas ()
+  "Focus the Areas panel."
+  (interactive)
+  (my-files-agent-shell--focus-window my-files-agent-shell--area-window))
+
+(defun my-files-agent-shell-focus-projects ()
+  "Focus the Projects panel."
+  (interactive)
+  (my-files-agent-shell--focus-window my-files-agent-shell--project-window))
+
+(defun my-files-agent-shell-focus-chats ()
+  "Focus the Chats panel."
+  (interactive)
+  (my-files-agent-shell--focus-window my-files-agent-shell--chat-window))
+
+(defun my-files-agent-shell-focus-main ()
+  "Focus the main chat window."
+  (interactive)
+  (my-files-agent-shell--focus-window my-files-agent-shell--main-window))
+
+(defun my-files-agent-shell-next-panel ()
+  "Move focus one panel to the right, wrapping after the main window."
+  (interactive)
+  (my-files-agent-shell--focus-window
+   (cond
+    ((eq (selected-window) my-files-agent-shell--area-window)
+     my-files-agent-shell--project-window)
+    ((eq (selected-window) my-files-agent-shell--project-window)
+     my-files-agent-shell--chat-window)
+    ((eq (selected-window) my-files-agent-shell--chat-window)
+     my-files-agent-shell--main-window)
+    (t my-files-agent-shell--area-window))))
+
+(defun my-files-agent-shell-previous-panel ()
+  "Move focus one panel to the left, wrapping before the Areas panel."
+  (interactive)
+  (my-files-agent-shell--focus-window
+   (cond
+    ((eq (selected-window) my-files-agent-shell--main-window)
+     my-files-agent-shell--chat-window)
+    ((eq (selected-window) my-files-agent-shell--chat-window)
+     my-files-agent-shell--project-window)
+    ((eq (selected-window) my-files-agent-shell--project-window)
+     my-files-agent-shell--area-window)
+    (t my-files-agent-shell--main-window))))
 
 (defun my-files-agent-shell--canonical-directory (directory)
   "Return DIRECTORY as a canonical directory name."
@@ -418,8 +503,16 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
         '(:mode-line-name :buffer-name :identifier)))
      (ignore-errors (agent-shell--resolved-agent-configs)))))
 
+(defun my-files-agent-shell--ensure-agent-shell-ready ()
+  "Signal an actionable error when agent-shell's dependency is incompatible."
+  (unless (fboundp 'shell-maker-start-v2)
+    (user-error
+     (concat "agent-shell requires shell-maker 0.97.2 or newer; "
+             "upgrade shell-maker and restart Emacs"))))
+
 (defun my-files-agent-shell--resume-chat (button)
   "Resume the saved agent-shell session represented by BUTTON."
+  (my-files-agent-shell--ensure-agent-shell-ready)
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
   (let* ((entry (button-get button 'my-files-agent-shell-entry))
@@ -442,6 +535,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
 
 (defun my-files-agent-shell--new-chat (_button)
   "Start a new agent-shell chat for the selected project."
+  (my-files-agent-shell--ensure-agent-shell-ready)
   (unless my-files-agent-shell--selected-project
     (user-error "Select a project first"))
   (unless (window-live-p my-files-agent-shell--main-window)
@@ -698,7 +792,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
             (add-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--schedule-refresh)
             (my-files-agent-shell-refresh)
-            (select-window area-window))
+            (my-files-agent-shell-focus-areas))
         (error
          (remove-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--schedule-refresh)

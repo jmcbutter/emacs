@@ -116,5 +116,46 @@
       (should (= (apply #'+ scaled) 60))
       (should (seq-every-p (lambda (width) (>= width 10)) scaled)))))
 
+(ert-deftest my-files-agent-shell-requires-compatible-shell-maker ()
+  (should (fboundp 'shell-maker-start-v2)))
+
+(ert-deftest my-files-agent-shell-panels-remain-resizable ()
+  (with-temp-buffer
+    (my-files-agent-shell-mode)
+    (should-not window-size-fixed)))
+
+(ert-deftest my-files-agent-shell-keyboard-navigation-crosses-columns ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((area (expand-file-name "Work" root))
+           (project (expand-file-name "Project" area))
+           (configuration (current-window-configuration)))
+      (make-directory project t)
+      (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
+      (write-region "" nil (expand-file-name ".project.toml" project) nil 'silent)
+      (unwind-protect
+          (progn
+            (let ((ignore-window-parameters t))
+              (delete-other-windows))
+            (setq my-files-agent-shell--selected-area nil
+                  my-files-agent-shell--selected-project nil)
+            (my-files-agent-shell-open)
+            (should (eq (selected-window)
+                        my-files-agent-shell--area-window))
+            (my-files-agent-shell-next-panel)
+            (should (eq (selected-window)
+                        my-files-agent-shell--project-window))
+            (my-files-agent-shell-next-panel)
+            (should (eq (selected-window)
+                        my-files-agent-shell--chat-window))
+            (my-files-agent-shell-next-panel)
+            (should (eq (selected-window)
+                        my-files-agent-shell--main-window))
+            (my-files-agent-shell-previous-panel)
+            (should (eq (selected-window)
+                        my-files-agent-shell--chat-window)))
+        (when (my-files-agent-shell--visible-p)
+          (my-files-agent-shell-close))
+        (set-window-configuration configuration)))))
+
 (provide 'my-files-agent-shell-test)
 ;;; my-files-agent-shell-test.el ends here
