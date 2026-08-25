@@ -119,6 +119,28 @@
 (ert-deftest my-files-agent-shell-requires-compatible-shell-maker ()
   (should (fboundp 'shell-maker-start-v2)))
 
+(ert-deftest my-files-agent-shell-uses-emacs-navigation-bindings ()
+  (dolist (binding '(("C-n" . my-files-agent-shell-next-item)
+                     ("C-p" . my-files-agent-shell-previous-item)
+                     ("C-f" . my-files-agent-shell-next-panel)
+                     ("C-b" . my-files-agent-shell-previous-panel)))
+    (should (eq (keymap-lookup my-files-agent-shell-mode-map (car binding))
+                (cdr binding))))
+  (dolist (key '("h" "j" "k" "l"))
+    (should-not
+     (memq (keymap-lookup my-files-agent-shell-mode-map key)
+           '(my-files-agent-shell-next-item
+             my-files-agent-shell-previous-item
+             my-files-agent-shell-next-panel
+             my-files-agent-shell-previous-panel)))))
+
+(ert-deftest my-files-agent-shell-highlights-the-keyboard-focus-row ()
+  (with-temp-buffer
+    (my-files-agent-shell-mode)
+    (should hl-line-mode)
+    (should (local-variable-p 'hl-line-sticky-flag))
+    (should-not hl-line-sticky-flag)))
+
 (ert-deftest my-files-agent-shell-panels-remain-resizable ()
   (with-temp-buffer
     (my-files-agent-shell-mode)

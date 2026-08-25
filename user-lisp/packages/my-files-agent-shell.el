@@ -127,16 +127,16 @@ discovery quick."
 (defvar-keymap my-files-agent-shell-mode-map
   :doc "Keymap shared by My Files browser panels."
   "n" #'my-files-agent-shell-next-item
-  "j" #'my-files-agent-shell-next-item
+  "C-n" #'my-files-agent-shell-next-item
   "<down>" #'my-files-agent-shell-next-item
   "p" #'my-files-agent-shell-previous-item
-  "k" #'my-files-agent-shell-previous-item
+  "C-p" #'my-files-agent-shell-previous-item
   "<up>" #'my-files-agent-shell-previous-item
   "TAB" #'my-files-agent-shell-next-item
   "<backtab>" #'my-files-agent-shell-previous-item
-  "l" #'my-files-agent-shell-next-panel
+  "C-f" #'my-files-agent-shell-next-panel
   "<right>" #'my-files-agent-shell-next-panel
-  "h" #'my-files-agent-shell-previous-panel
+  "C-b" #'my-files-agent-shell-previous-panel
   "<left>" #'my-files-agent-shell-previous-panel
   "1" #'my-files-agent-shell-focus-areas
   "2" #'my-files-agent-shell-focus-projects
@@ -150,7 +150,9 @@ discovery quick."
   "Base mode for My Files browser panels."
   (setq-local truncate-lines t
               cursor-type nil
-              mode-line-format nil))
+              mode-line-format nil
+              hl-line-sticky-flag nil)
+  (hl-line-mode 1))
 
 (define-derived-mode my-files-agent-shell-area-mode
   my-files-agent-shell-mode "Areas"
