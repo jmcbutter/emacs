@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Jordan
 ;; Author: Jordan
 ;; Keywords: convenience, tools
-;; Package-Requires: ((emacs "29.1") (agent-shell "0.55"))
+;; Package-Requires: ((emacs "29.1") (agent-shell "0.55") (codex-ide "0.3.2"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -15,10 +15,11 @@
 ;;
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
-;; containing `.project.toml'.  The chat panel shows live `agent-shell'
-;; buffers whose working directories belong to the selected project.  Busy
-;; and blocked chats are In Progress, idle live chats are Staged, and closed
-;; resumable transcripts are Completed.
+;; containing `.project.toml'.  The chat panel combines live `agent-shell'
+;; buffers, their saved transcripts, and non-archived Codex tasks whose
+;; working directories belong to the selected project.  Busy chats and active
+;; Codex tasks are In Progress, idle or stored chats are Staged, and closed
+;; resumable agent-shell transcripts are Completed.
 
 ;;; Code:
 
@@ -88,6 +89,11 @@ discovery quick."
   :type 'natnum
   :group 'my-files-agent-shell)
 
+(defcustom my-files-agent-shell-codex-refresh-interval 10
+  "Seconds between Codex task refreshes while the browser is visible."
+  :type 'number
+  :group 'my-files-agent-shell)
+
 (defface my-files-agent-shell-heading
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face used for panel headings."
@@ -115,6 +121,13 @@ discovery quick."
 (defvar my-files-agent-shell--selected-area nil)
 (defvar my-files-agent-shell--selected-project nil)
 (defvar my-files-agent-shell--refresh-timer nil)
+(defvar my-files-agent-shell--codex-refresh-timer nil)
+(defvar my-files-agent-shell--codex-session nil)
+(defvar my-files-agent-shell--codex-session-initialized nil)
+(defvar my-files-agent-shell--codex-refreshing nil)
+(defvar my-files-agent-shell--codex-threads nil)
+(defvar my-files-agent-shell--codex-error nil)
+(defvar my-files-agent-shell--codex-last-refresh-time nil)
 (defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 
@@ -135,12 +148,21 @@ discovery quick."
   "Agent-shell events that can change a chat row or category.")
 
 (declare-function agent-shell-buffers "agent-shell")
+(declare-function agent-shell-cwd "agent-shell-project")
 (declare-function agent-shell-resume-session "agent-shell")
 (declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell-status "agent-shell")
 (declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function agent-shell--resolved-agent-configs "agent-shell")
+(declare-function codex-ide--create-query-session "codex-ide-session")
+(declare-function codex-ide--query-only-session-for-directory
+                  "codex-ide-session")
+(declare-function codex-ide--request-async "codex-ide-protocol")
+(declare-function codex-ide--set-session-status "codex-ide-core")
+(declare-function codex-ide-session-process "codex-ide-core")
+(declare-function codex-ide-session-status "codex-ide-core")
 (defvar agent-shell--state)
+(defvar codex-ide-cli-path)
 
 (defvar-keymap my-files-agent-shell-mode-map
   :doc "Keymap shared by My Files browser panels."
@@ -288,6 +310,18 @@ discovery quick."
   "Return DIRECTORY as a canonical directory name."
   (file-name-as-directory (file-truename (expand-file-name directory))))
 
+(defun my-files-agent-shell-agent-data-directory (subdir)
+  "Return the centralized agent-shell directory for SUBDIR.
+
+When the agent's working directory is below a structured workspace, store
+agent-shell data below the nearest ancestor containing `.project.toml'.
+Otherwise retain agent-shell's normal behavior and store data below its CWD."
+  (let* ((cwd (agent-shell-cwd))
+         (workspace (locate-dominating-file
+                     cwd my-files-agent-shell-project-marker)))
+    (expand-file-name (file-name-concat ".agent-shell" subdir)
+                      (or workspace cwd))))
+
 (defun my-files-agent-shell--path-name (directory)
   "Return the final directory component of DIRECTORY."
   (file-name-nondirectory (directory-file-name directory)))
@@ -361,6 +395,154 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
                             (file-in-directory-p chat-root project-root)))
                     (file-error nil))))))
        (or buffers (agent-shell-buffers))))))
+
+(defun my-files-agent-shell--project-codex-threads (project threads)
+  "Return Codex THREADS whose working directories belong to PROJECT."
+  (when project
+    (let ((project-root (my-files-agent-shell--canonical-directory project)))
+      (seq-filter
+       (lambda (thread)
+         (when-let* ((directory (alist-get 'cwd thread)))
+           (condition-case nil
+               (let ((thread-root
+                      (my-files-agent-shell--canonical-directory directory)))
+                 (or (equal thread-root project-root)
+                     (file-in-directory-p thread-root project-root)))
+             (file-error nil))))
+       threads))))
+
+(defun my-files-agent-shell--codex-thread-status (thread)
+  "Return THREAD's Codex status as a string."
+  (let ((status (alist-get 'type (alist-get 'status thread))))
+    (if status (format "%s" status) "notLoaded")))
+
+(defun my-files-agent-shell--codex-thread-category (thread)
+  "Return the workflow category for Codex THREAD."
+  (if (string= (my-files-agent-shell--codex-thread-status thread) "active")
+      'in-progress
+    'staged))
+
+(defun my-files-agent-shell--codex-thread-title (thread)
+  "Return a concise display title for Codex THREAD."
+  (let ((title (or (alist-get 'name thread)
+                   (alist-get 'preview thread)
+                   "Untitled Codex task")))
+    (or (car (split-string (string-trim title) "\n" t))
+        "Untitled Codex task")))
+
+(defun my-files-agent-shell--codex-session-live-p ()
+  "Return non-nil when the browser's Codex query session is live."
+  (and my-files-agent-shell--codex-session
+       (process-live-p
+        (codex-ide-session-process my-files-agent-shell--codex-session))))
+
+(defun my-files-agent-shell--codex-error-text (error-data)
+  "Return a concise display string for Codex ERROR-DATA."
+  (cond
+   ((stringp error-data) error-data)
+   ((and (consp error-data)
+         (symbolp (car error-data))
+         (get (car error-data) 'error-conditions))
+    (error-message-string error-data))
+   ((ignore-errors (alist-get 'message error-data))
+    (format "%s" (alist-get 'message error-data)))
+   (t (format "%S" error-data))))
+
+(defun my-files-agent-shell--codex-refresh-failed (error-data)
+  "Finish a Codex refresh that failed with ERROR-DATA."
+  (setq my-files-agent-shell--codex-refreshing nil
+        my-files-agent-shell--codex-last-refresh-time (float-time)
+        my-files-agent-shell--codex-error
+        (my-files-agent-shell--codex-error-text error-data))
+  (my-files-agent-shell--schedule-refresh))
+
+(defun my-files-agent-shell--codex-list-page (session cursor threads)
+  "Fetch one Codex task page using SESSION after CURSOR and THREADS."
+  (codex-ide--request-async
+   session
+   "thread/list"
+   (delq nil
+         `((archived . :json-false)
+           (limit . 100)
+           (sortKey . "updated_at")
+           (sortDirection . "desc")
+           ,@(when cursor `((cursor . ,cursor)))))
+   (lambda (result error-data)
+     (if error-data
+         (my-files-agent-shell--codex-refresh-failed error-data)
+       (let* ((page (append (alist-get 'data result) nil))
+              (all-threads (nconc threads page))
+              (next-cursor (alist-get 'nextCursor result)))
+         (if next-cursor
+             (my-files-agent-shell--codex-list-page
+              session next-cursor all-threads)
+           (setq my-files-agent-shell--codex-threads all-threads
+                 my-files-agent-shell--codex-error nil
+                 my-files-agent-shell--codex-refreshing nil
+                 my-files-agent-shell--codex-last-refresh-time (float-time))
+           (my-files-agent-shell--schedule-refresh)))))))
+
+(defun my-files-agent-shell--codex-list-threads (session)
+  "Refresh cached Codex tasks using initialized SESSION."
+  (my-files-agent-shell--codex-list-page session nil nil))
+
+(defun my-files-agent-shell--codex-initialize (session)
+  "Initialize Codex query SESSION, then load its tasks."
+  (codex-ide--request-async
+   session
+   "initialize"
+   '((clientInfo . ((name . "my-files-agent-shell")
+                    (title . "My Files Agent Chats")
+                    (version . "1.0")))
+     (capabilities . ((experimentalApi . t))))
+   (lambda (_result error-data)
+     (if error-data
+         (my-files-agent-shell--codex-refresh-failed error-data)
+       (setq my-files-agent-shell--codex-session-initialized t)
+       (codex-ide--set-session-status session "idle" 'initialized)
+       (my-files-agent-shell--codex-list-threads session)))))
+
+(defun my-files-agent-shell--codex-refresh-due-p ()
+  "Return non-nil when cached Codex tasks should be refreshed."
+  (or (null my-files-agent-shell--codex-last-refresh-time)
+      (>= (- (float-time) my-files-agent-shell--codex-last-refresh-time)
+          my-files-agent-shell-codex-refresh-interval)))
+
+(defun my-files-agent-shell--refresh-codex-threads (&optional force)
+  "Refresh cached Codex tasks asynchronously.
+
+When FORCE is non-nil, ignore the normal refresh interval."
+  (when (and (not my-files-agent-shell--codex-refreshing)
+             (or force (my-files-agent-shell--codex-refresh-due-p)))
+    (setq my-files-agent-shell--codex-refreshing t
+          my-files-agent-shell--codex-error nil)
+    (condition-case error-data
+        (progn
+          (unless (require 'codex-ide nil t)
+            (user-error "codex-ide is not installed"))
+          (unless (my-files-agent-shell--codex-session-live-p)
+            (let* ((directory
+                    (my-files-agent-shell--canonical-directory
+                     my-files-agent-shell-root-directory))
+                   (existing
+                    (codex-ide--query-only-session-for-directory directory)))
+              (setq my-files-agent-shell--codex-session
+                    (or existing
+                        (let ((default-directory directory))
+                          (unless (executable-find codex-ide-cli-path)
+                            (user-error "Codex CLI is not available"))
+                          (codex-ide--create-query-session)))
+                    my-files-agent-shell--codex-session-initialized
+                    (and existing
+                         (string= (codex-ide-session-status existing)
+                                  "idle")))))
+          (if my-files-agent-shell--codex-session-initialized
+              (my-files-agent-shell--codex-list-threads
+               my-files-agent-shell--codex-session)
+            (my-files-agent-shell--codex-initialize
+             my-files-agent-shell--codex-session)))
+      (error
+       (my-files-agent-shell--codex-refresh-failed error-data)))))
 
 (defun my-files-agent-shell--live-session-id (buffer)
   "Return the agent session ID associated with live BUFFER."
@@ -579,6 +761,79 @@ in the Completed section.  Active chats must finish or be interrupted first."
         (my-files-agent-shell--schedule-refresh)
         (message "Archived %s; its saved transcript is under Completed" title)))))
 
+(defun my-files-agent-shell--insert-codex-chat-button (thread)
+  "Insert buttons that open and archive Codex THREAD."
+  (let* ((title (my-files-agent-shell--codex-thread-title thread))
+         (status (my-files-agent-shell--codex-thread-status thread))
+         (status-label (if (string= status "active")
+                           "[codex:active]"
+                         "[codex]"))
+         (title-width (max 8 (- my-files-agent-shell-chat-width
+                                (string-width status-label) 12)))
+         (display-title
+          (truncate-string-to-width title title-width nil nil "…")))
+    (insert " ")
+    (insert-text-button
+     (format "%s %s" status-label display-title)
+     'action #'my-files-agent-shell--open-codex-chat
+     'my-files-agent-shell-codex-entry thread
+     'my-files-agent-shell-action 'open
+     'follow-link t
+     'help-echo "Open this task in Codex"
+     'face 'default)
+    (insert "  ")
+    (insert-text-button
+     "Archive"
+     'action #'my-files-agent-shell--archive-codex-chat
+     'my-files-agent-shell-codex-thread thread
+     'my-files-agent-shell-action 'archive
+     'follow-link t
+     'help-echo "Archive this Codex task"
+     'face 'my-files-agent-shell-muted)
+    (insert "\n")))
+
+(defun my-files-agent-shell--open-codex-chat (button)
+  "Open the Codex task represented by BUTTON in the desktop app."
+  (let* ((thread (button-get button 'my-files-agent-shell-codex-entry))
+         (thread-id (alist-get 'id thread)))
+    (unless thread-id
+      (user-error "That Codex task has no thread id"))
+    (browse-url (format "codex://threads/%s" thread-id))))
+
+(defun my-files-agent-shell--request-codex-archive (thread)
+  "Archive Codex THREAD and remove it from the pane after success."
+  (unless (and my-files-agent-shell--codex-session-initialized
+               (my-files-agent-shell--codex-session-live-p))
+    (user-error "Codex task service is not ready; refresh the pane and retry"))
+  (let ((thread-id (alist-get 'id thread))
+        (title (my-files-agent-shell--codex-thread-title thread)))
+    (codex-ide--request-async
+     my-files-agent-shell--codex-session
+     "thread/archive"
+     `((threadId . ,thread-id))
+     (lambda (_result error-data)
+       (if error-data
+           (progn
+             (setq my-files-agent-shell--codex-error
+                   (my-files-agent-shell--codex-error-text error-data))
+             (my-files-agent-shell--schedule-refresh)
+             (message "Could not archive %s: %s"
+                      title my-files-agent-shell--codex-error))
+         (setq my-files-agent-shell--codex-threads
+               (seq-remove
+                (lambda (entry)
+                  (equal (alist-get 'id entry) thread-id))
+                my-files-agent-shell--codex-threads))
+         (my-files-agent-shell--schedule-refresh)
+         (message "Archived Codex task %s" title))))))
+
+(defun my-files-agent-shell--archive-codex-chat (button)
+  "Archive the Codex task represented by BUTTON."
+  (let* ((thread (button-get button 'my-files-agent-shell-codex-thread))
+         (title (my-files-agent-shell--codex-thread-title thread)))
+    (when (yes-or-no-p (format "Archive Codex task %s? " title))
+      (my-files-agent-shell--request-codex-archive thread))))
+
 (defun my-files-agent-shell--agent-config (agent-name)
   "Return the installed agent-shell config matching AGENT-NAME."
   (when agent-name
@@ -769,8 +1024,9 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
         (my-files-agent-shell--set-chat-section-button-state
          button collapsed)))))
 
-(defun my-files-agent-shell--render-chat-lists (chats saved-chats)
-  "Render the agent chat panel using live CHATS and SAVED-CHATS."
+(defun my-files-agent-shell--render-chat-lists
+    (chats saved-chats &optional codex-threads)
+  "Render live CHATS, SAVED-CHATS, and CODEX-THREADS in the chat panel."
   (with-current-buffer
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--chat-buffer-name
@@ -789,30 +1045,49 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
              'face 'font-lock-keyword-face)
             (insert "\n")
             (my-files-agent-shell--insert-empty
-             "Categories update automatically; Archive closes staged chats")
+             "Archive closes staged agent-shell chats or Codex tasks")
+            (when my-files-agent-shell--codex-error
+              (my-files-agent-shell--insert-empty
+               (format "Codex refresh failed: %s"
+                       my-files-agent-shell--codex-error)))
             (insert "\n")
-            (let (in-progress staged)
+            (let (in-progress staged in-progress-codex staged-codex)
               (dolist (chat chats)
                 (my-files-agent-shell--subscribe-chat chat)
                 (if (eq (my-files-agent-shell--chat-category chat) 'staged)
                     (push chat staged)
                   (push chat in-progress)))
+              (dolist (thread codex-threads)
+                (if (eq (my-files-agent-shell--codex-thread-category thread)
+                        'in-progress)
+                    (push thread in-progress-codex)
+                  (push thread staged-codex)))
               (setq in-progress (nreverse in-progress)
-                    staged (nreverse staged))
+                    staged (nreverse staged)
+                    in-progress-codex (nreverse in-progress-codex)
+                    staged-codex (nreverse staged-codex))
               (dolist (section my-files-agent-shell--chat-sections)
                 (pcase (car section)
                   ('in-progress
                    (my-files-agent-shell--insert-chat-section
-                    'in-progress (cdr section) (length in-progress)
+                    'in-progress (cdr section)
+                    (+ (length in-progress) (length in-progress-codex))
                     (lambda ()
                       (dolist (chat in-progress)
-                        (my-files-agent-shell--insert-chat-button chat)))))
+                        (my-files-agent-shell--insert-chat-button chat))
+                      (dolist (thread in-progress-codex)
+                        (my-files-agent-shell--insert-codex-chat-button
+                         thread)))))
                   ('staged
                    (my-files-agent-shell--insert-chat-section
-                    'staged (cdr section) (length staged)
+                    'staged (cdr section)
+                    (+ (length staged) (length staged-codex))
                     (lambda ()
                       (dolist (chat staged)
-                        (my-files-agent-shell--insert-chat-button chat)))))
+                        (my-files-agent-shell--insert-chat-button chat))
+                      (dolist (thread staged-codex)
+                        (my-files-agent-shell--insert-codex-chat-button
+                         thread)))))
                   ('completed
                    (my-files-agent-shell--insert-chat-section
                     'completed (cdr section) (length saved-chats)
@@ -825,9 +1100,10 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
 
 ;;;###autoload
 (defun my-files-agent-shell-refresh ()
-  "Rescan areas, projects, and open agent-shell chats."
+  "Rescan projects, agent-shell chats, and cached Codex tasks."
   (interactive)
-  (let* ((areas (my-files-agent-shell--discover-areas))
+  (let* ((force-codex-refresh (called-interactively-p 'interactive))
+         (areas (my-files-agent-shell--discover-areas))
          (selected-area
           (and my-files-agent-shell--selected-area
                (seq-find
@@ -856,10 +1132,17 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                    (my-files-agent-shell--discover-saved-chats
                     my-files-agent-shell--selected-project
                     (delq nil (mapcar #'my-files-agent-shell--live-session-id
-                                      chats))))))
+                                      chats)))))
+             (codex-threads
+              (my-files-agent-shell--project-codex-threads
+               my-files-agent-shell--selected-project
+               my-files-agent-shell--codex-threads)))
         (my-files-agent-shell--render-areas areas)
         (my-files-agent-shell--render-projects projects)
-        (my-files-agent-shell--render-chat-lists chats saved-chats)))))
+        (my-files-agent-shell--render-chat-lists
+         chats saved-chats codex-threads)
+        (my-files-agent-shell--refresh-codex-threads
+         force-codex-refresh)))))
 
 (defun my-files-agent-shell--schedule-refresh (&rest _ignored)
   "Schedule a browser refresh after current buffer activity settles."
@@ -873,6 +1156,18 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
              (setq my-files-agent-shell--refresh-timer nil)
              (when (my-files-agent-shell--visible-p)
                (my-files-agent-shell-refresh)))))))
+
+(defun my-files-agent-shell--start-codex-refresh-timer ()
+  "Start periodic Codex task refreshes for the visible browser."
+  (when (timerp my-files-agent-shell--codex-refresh-timer)
+    (cancel-timer my-files-agent-shell--codex-refresh-timer))
+  (setq my-files-agent-shell--codex-refresh-timer
+        (run-at-time
+         my-files-agent-shell-codex-refresh-interval
+         my-files-agent-shell-codex-refresh-interval
+         (lambda ()
+           (when (my-files-agent-shell--visible-p)
+             (my-files-agent-shell--refresh-codex-threads t))))))
 
 (defun my-files-agent-shell--scaled-panel-widths (total-width)
   "Return three panel widths suitable for TOTAL-WIDTH."
@@ -957,6 +1252,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
             (add-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--schedule-refresh)
             (my-files-agent-shell-refresh)
+            (my-files-agent-shell--start-codex-refresh-timer)
             (my-files-agent-shell-focus-areas))
         (error
          (remove-hook 'buffer-list-update-hook
@@ -977,7 +1273,10 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                #'my-files-agent-shell--schedule-refresh)
   (when (timerp my-files-agent-shell--refresh-timer)
     (cancel-timer my-files-agent-shell--refresh-timer))
-  (setq my-files-agent-shell--refresh-timer nil)
+  (when (timerp my-files-agent-shell--codex-refresh-timer)
+    (cancel-timer my-files-agent-shell--codex-refresh-timer))
+  (setq my-files-agent-shell--refresh-timer nil
+        my-files-agent-shell--codex-refresh-timer nil)
   (let ((configuration my-files-agent-shell--saved-window-configuration))
     (setq my-files-agent-shell--saved-window-configuration nil
           my-files-agent-shell--area-window nil
