@@ -115,7 +115,7 @@ discovery quick."
 (defvar my-files-agent-shell--selected-area nil)
 (defvar my-files-agent-shell--selected-project nil)
 (defvar my-files-agent-shell--refresh-timer nil)
-(defvar-local my-files-agent-shell--subscribed nil)
+(defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 
 (defconst my-files-agent-shell--chat-sections
@@ -123,6 +123,16 @@ discovery quick."
     (staged . "Staged")
     (completed . "Completed"))
   "Chat categories in their display order.")
+
+(defconst my-files-agent-shell--chat-refresh-events
+  '(input-submitted
+    turn-complete
+    prompt-ready
+    permission-request
+    permission-response
+    session-title-changed
+    error)
+  "Agent-shell events that can change a chat row or category.")
 
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-resume-session "agent-shell")
@@ -512,16 +522,30 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
 (defun my-files-agent-shell--insert-chat-button (buffer)
   "Insert a button that opens agent-shell BUFFER."
   (let* ((title (my-files-agent-shell--chat-title buffer))
-         (status (my-files-agent-shell--chat-status buffer))
-         (label (format "%-8s %s" (concat "[" status "]") title)))
+         (status-label (concat "[" (my-files-agent-shell--chat-status buffer)
+                               "]"))
+         (title-width (max 8 (- my-files-agent-shell-chat-width
+                                (string-width status-label) 12)))
+         (display-title
+          (truncate-string-to-width title title-width nil nil "…")))
     (insert " ")
     (insert-text-button
-     label
+     (format "%s %s" status-label display-title)
      'action #'my-files-agent-shell--open-chat
      'my-files-agent-shell-buffer buffer
+     'my-files-agent-shell-action 'open
      'follow-link t
      'help-echo (format "Open %s" (buffer-name buffer))
      'face 'default)
+    (insert "  ")
+    (insert-text-button
+     "Archive"
+     'action #'my-files-agent-shell--archive-chat
+     'my-files-agent-shell-buffer buffer
+     'my-files-agent-shell-action 'archive
+     'follow-link t
+     'help-echo "Close this staged chat and keep its saved transcript"
+     'face 'my-files-agent-shell-muted)
     (insert "\n")))
 
 (defun my-files-agent-shell--open-chat (button)
@@ -534,6 +558,26 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
       (user-error "The My Files main window is no longer available"))
     (set-window-buffer my-files-agent-shell--main-window buffer)
     (select-window my-files-agent-shell--main-window)))
+
+(defun my-files-agent-shell--archive-chat (button)
+  "Archive the staged agent-shell buffer represented by BUTTON.
+
+Archiving closes the live buffer.  Its saved transcript remains available
+in the Completed section.  Active chats must finish or be interrupted first."
+  (let ((buffer (button-get button 'my-files-agent-shell-buffer)))
+    (unless (buffer-live-p buffer)
+      (my-files-agent-shell--schedule-refresh)
+      (user-error "That agent chat is no longer open"))
+    (unless (eq (my-files-agent-shell--chat-status-symbol buffer) 'ready)
+      (user-error
+       "Only staged chats can be archived; wait for it to finish or interrupt it"))
+    (let ((title (my-files-agent-shell--chat-title buffer)))
+      (when (yes-or-no-p
+             (format "Archive %s and close its live buffer? " title))
+        (unless (kill-buffer buffer)
+          (user-error "Could not archive %s" title))
+        (my-files-agent-shell--schedule-refresh)
+        (message "Archived %s; its saved transcript is under Completed" title)))))
 
 (defun my-files-agent-shell--agent-config (agent-name)
   "Return the installed agent-shell config matching AGENT-NAME."
@@ -591,17 +635,18 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   (my-files-agent-shell--schedule-refresh))
 
 (defun my-files-agent-shell--subscribe-chat (buffer)
-  "Refresh the browser when BUFFER's session title changes or it is killed."
+  "Refresh the browser when BUFFER changes lifecycle state or is killed."
   (with-current-buffer buffer
-    (unless my-files-agent-shell--subscribed
-      (setq-local my-files-agent-shell--subscribed t)
-      (agent-shell-subscribe-to
-       :shell-buffer buffer
-       :event 'session-title-changed
-       :on-event (lambda (_event)
-                   (my-files-agent-shell--schedule-refresh)))
-      (add-hook 'kill-buffer-hook
-                #'my-files-agent-shell--schedule-refresh nil t))))
+    (dolist (event my-files-agent-shell--chat-refresh-events)
+      (unless (memq event my-files-agent-shell--subscribed-events)
+        (agent-shell-subscribe-to
+         :shell-buffer buffer
+         :event event
+         :on-event (lambda (_event)
+                     (my-files-agent-shell--schedule-refresh)))
+        (push event my-files-agent-shell--subscribed-events)))
+    (add-hook 'kill-buffer-hook
+              #'my-files-agent-shell--schedule-refresh nil t)))
 
 (defun my-files-agent-shell--render-areas (areas)
   "Render the area panel using AREAS."
@@ -742,7 +787,10 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
              'follow-link t
              'help-echo "Start a new agent-shell chat for this project"
              'face 'font-lock-keyword-face)
-            (insert "\n\n")
+            (insert "\n")
+            (my-files-agent-shell--insert-empty
+             "Categories update automatically; Archive closes staged chats")
+            (insert "\n")
             (let (in-progress staged)
               (dolist (chat chats)
                 (my-files-agent-shell--subscribe-chat chat)
