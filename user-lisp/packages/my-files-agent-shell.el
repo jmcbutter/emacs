@@ -130,6 +130,7 @@ discovery quick."
 (defvar my-files-agent-shell--codex-last-refresh-time nil)
 (defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
+(defvar-local my-files-agent-shell--assigned-project nil)
 
 (defconst my-files-agent-shell--chat-sections
   '((in-progress . "In Progress")
@@ -386,14 +387,20 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
       (seq-filter
        (lambda (buffer)
          (when (buffer-live-p buffer)
-           (let ((directory (buffer-local-value 'default-directory buffer)))
-             (and directory
-                  (condition-case nil
-                      (let ((chat-root
-                             (my-files-agent-shell--canonical-directory directory)))
-                        (or (equal chat-root project-root)
-                            (file-in-directory-p chat-root project-root)))
-                    (file-error nil))))))
+           (let ((assigned-project
+                  (buffer-local-value
+                   'my-files-agent-shell--assigned-project buffer))
+                 (directory (buffer-local-value 'default-directory buffer)))
+             (if assigned-project
+                 (equal assigned-project project-root)
+               (and directory
+                    (condition-case nil
+                        (let ((chat-root
+                               (my-files-agent-shell--canonical-directory
+                                directory)))
+                          (or (equal chat-root project-root)
+                              (file-in-directory-p chat-root project-root)))
+                      (file-error nil)))))))
        (or buffers (agent-shell-buffers))))))
 
 (defun my-files-agent-shell--project-codex-threads (project threads)
@@ -519,7 +526,7 @@ When FORCE is non-nil, ignore the normal refresh interval."
     (condition-case error-data
         (progn
           (unless (require 'codex-ide nil t)
-            (user-error "codex-ide is not installed"))
+            (user-error "Codex IDE is not installed"))
           (unless (my-files-agent-shell--codex-session-live-p)
             (let* ((directory
                     (my-files-agent-shell--canonical-directory
@@ -883,11 +890,41 @@ in the Completed section.  Active chats must finish or be interrupted first."
     (user-error "Select a project first"))
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
-  (let ((default-directory my-files-agent-shell--selected-project)
-        (agent-shell-session-strategy 'new))
-    (with-selected-window my-files-agent-shell--main-window
-      (agent-shell '(4))))
+  (let* ((project
+          (my-files-agent-shell--canonical-directory
+           my-files-agent-shell--selected-project))
+         (buffer
+          (with-selected-window my-files-agent-shell--main-window
+            (let ((default-directory project)
+                  (agent-shell-session-strategy 'new))
+              (agent-shell '(4))))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq-local my-files-agent-shell--assigned-project project))))
   (my-files-agent-shell--schedule-refresh))
+
+(defun my-files-agent-shell--main-agent-chat-buffer ()
+  "Return the live agent-shell buffer displayed in the main window."
+  (when (window-live-p my-files-agent-shell--main-window)
+    (let ((buffer (window-buffer my-files-agent-shell--main-window)))
+      (and (memq buffer (agent-shell-buffers)) buffer))))
+
+(defun my-files-agent-shell--assign-main-chat-to-project (_button)
+  "Assign the main window's agent-shell chat to the selected project."
+  (unless my-files-agent-shell--selected-project
+    (user-error "Select a project first"))
+  (let ((buffer (my-files-agent-shell--main-agent-chat-buffer))
+        (project
+         (my-files-agent-shell--canonical-directory
+          my-files-agent-shell--selected-project)))
+    (unless buffer
+      (user-error "The main window is not showing a live agent-shell chat"))
+    (with-current-buffer buffer
+      (setq-local my-files-agent-shell--assigned-project project))
+    (my-files-agent-shell--schedule-refresh)
+    (message "Assigned %s to %s"
+             (my-files-agent-shell--chat-title buffer)
+             (my-files-agent-shell--path-name project))))
 
 (defun my-files-agent-shell--subscribe-chat (buffer)
   "Refresh the browser when BUFFER changes lifecycle state or is killed."
@@ -1044,6 +1081,18 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
              'help-echo "Start a new agent-shell chat for this project"
              'face 'font-lock-keyword-face)
             (insert "\n")
+            (when-let* ((main-chat
+                         (my-files-agent-shell--main-agent-chat-buffer)))
+              (unless (memq main-chat chats)
+                (insert " ")
+                (insert-text-button
+                 "+ Assign current chat here"
+                 'action #'my-files-agent-shell--assign-main-chat-to-project
+                 'follow-link t
+                 'help-echo
+                 "Show the main window's live agent-shell chat in this project"
+                 'face 'font-lock-keyword-face)
+                (insert "\n")))
             (my-files-agent-shell--insert-empty
              "Archive closes staged agent-shell chats or Codex tasks")
             (when my-files-agent-shell--codex-error

@@ -206,6 +206,79 @@
                               ((threadId . "thread-to-archive")))))
       (should-not my-files-agent-shell--codex-threads))))
 
+(ert-deftest my-files-agent-shell-starts-new-chat-in-selected-project ()
+  (let* ((project (make-temp-file "agent-shell-project-" t))
+         (other (make-temp-file "agent-shell-other-" t))
+         (caller (generate-new-buffer " agent-chat-panel-caller"))
+         (main-buffer (generate-new-buffer " agent-chat-main"))
+         (launched-chat (generate-new-buffer " launched-agent-chat"))
+         (main-window (selected-window))
+         (original-buffer (window-buffer main-window))
+         (my-files-agent-shell--selected-project project)
+         (my-files-agent-shell--main-window main-window)
+         started-in)
+    (unwind-protect
+        (progn
+          (with-current-buffer main-buffer
+            (setq default-directory (file-name-as-directory other)))
+          (set-window-buffer main-window main-buffer)
+          (cl-letf (((symbol-function 'agent-shell)
+                     (lambda (&optional _argument)
+                       (setq started-in default-directory)
+                       launched-chat))
+                    ((symbol-function 'my-files-agent-shell--schedule-refresh)
+                     #'ignore))
+            (with-current-buffer caller
+              (my-files-agent-shell--new-chat nil)))
+          (should
+           (equal (file-name-as-directory (file-truename started-in))
+                  (file-name-as-directory (file-truename project))))
+          (should
+           (equal (buffer-local-value
+                   'my-files-agent-shell--assigned-project launched-chat)
+                  (my-files-agent-shell--canonical-directory project))))
+      (set-window-buffer main-window original-buffer)
+      (mapc #'kill-buffer (list caller main-buffer launched-chat))
+      (delete-directory project t)
+      (delete-directory other t))))
+
+(ert-deftest my-files-agent-shell-assigns-running-main-chat-to-project ()
+  (let* ((project (make-temp-file "agent-shell-project-" t))
+         (other (make-temp-file "agent-shell-other-" t))
+         (chat (generate-new-buffer " running-main-agent-chat"))
+         (main-window (selected-window))
+         (original-buffer (window-buffer main-window))
+         (my-files-agent-shell--selected-project project)
+         (my-files-agent-shell--main-window main-window))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq default-directory (file-name-as-directory other)
+                  major-mode 'agent-shell-mode))
+          (set-window-buffer main-window chat)
+          (cl-letf (((symbol-function 'agent-shell-buffers)
+                     (lambda () (list chat)))
+                    ((symbol-function 'my-files-agent-shell--schedule-refresh)
+                     #'ignore))
+            (my-files-agent-shell--render-chat-lists nil nil nil)
+            (with-current-buffer my-files-agent-shell--chat-buffer-name
+              (should
+               (string-match-p "+ Assign current chat here"
+                               (buffer-string))))
+            (my-files-agent-shell--assign-main-chat-to-project nil))
+          (should
+           (equal (buffer-local-value
+                   'my-files-agent-shell--assigned-project chat)
+                  (my-files-agent-shell--canonical-directory project)))
+          (should
+           (equal (my-files-agent-shell--project-chat-buffers
+                   project (list chat))
+                  (list chat))))
+      (set-window-buffer main-window original-buffer)
+      (kill-buffer chat)
+      (delete-directory project t)
+      (delete-directory other t))))
+
 (ert-deftest my-files-agent-shell-categorizes-live-chat-state ()
   (let ((buffer (generate-new-buffer " chat-category")))
     (unwind-protect
