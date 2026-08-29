@@ -22,7 +22,8 @@
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
-;; Hovering a conversation displays its complete title through Emacs help text.
+;; Hovering displays the complete title as help text; keyboard highlighting
+;; displays it in the echo area.
 
 ;;; Code:
 
@@ -181,6 +182,8 @@ of the conversation to confirm that the correct session was restored."
 (defvar-local my-files-agent-shell--highlighted-button-key nil)
 (defvar-local my-files-agent-shell--selected-path-button nil)
 (defvar my-files-agent-shell--rendering-section nil)
+(defvar my-files-agent-shell--echoed-conversation-title nil
+  "Last browser-owned conversation title displayed in the echo area.")
 
 (defconst my-files-agent-shell--workflow-stages
   '((in-progress . "In Progress")
@@ -421,6 +424,36 @@ of the conversation to confirm that the correct session was restored."
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
 
+(defun my-files-agent-shell--highlighted-conversation-title (&optional frame)
+  "Return the selected conversation title in FRAME, or nil."
+  (let ((window (frame-selected-window (or frame (selected-frame)))))
+    (when (window-live-p window)
+      (with-current-buffer (window-buffer window)
+        (when (derived-mode-p 'my-files-agent-shell-chat-mode)
+          (when-let* ((button (button-at (window-point window))))
+            (button-get
+             button 'my-files-agent-shell-conversation-title)))))))
+
+(defun my-files-agent-shell--clear-conversation-echo ()
+  "Clear the echo area when it still contains the browser-owned title."
+  (when my-files-agent-shell--echoed-conversation-title
+    (when (equal (current-message)
+                 my-files-agent-shell--echoed-conversation-title)
+      (let ((message-log-max nil))
+        (message nil)))
+    (setq my-files-agent-shell--echoed-conversation-title nil)))
+
+(defun my-files-agent-shell--update-conversation-echo (&optional frame)
+  "Show FRAME's highlighted conversation title in the echo area."
+  (if-let* ((title (my-files-agent-shell--highlighted-conversation-title
+                    frame)))
+      (progn
+        (setq my-files-agent-shell--echoed-conversation-title title)
+        (unless (equal (current-message) title)
+          (let ((message-log-max nil))
+            (message "%s" title))))
+    (my-files-agent-shell--clear-conversation-echo)))
+
 (define-derived-mode my-files-agent-shell-mode special-mode "My Files"
   "Base mode for My Files browser panels."
   (setq-local truncate-lines t
@@ -442,7 +475,9 @@ of the conversation to confirm that the correct session was restored."
 
 (define-derived-mode my-files-agent-shell-chat-mode
   my-files-agent-shell-mode "Agent Chats"
-  "Mode for the My Files agent-shell chat panel.")
+  "Mode for the My Files agent-shell chat panel."
+  (add-hook 'post-command-hook
+            #'my-files-agent-shell--update-conversation-echo nil t))
 
 (defun my-files-agent-shell--visible-buttons ()
   "Return visible buttons in the current buffer in display order."
@@ -588,7 +623,8 @@ of the conversation to confirm that the correct session was restored."
                my-files-agent-shell--selected-path-button 'face
                (if active
                    'my-files-agent-shell-selected
-                 'my-files-agent-shell-selected-inactive)))))))))
+                 'my-files-agent-shell-selected-inactive)))))))
+    (my-files-agent-shell--update-conversation-echo frame)))
 
 (defun my-files-agent-shell--focus-window (window)
   "Select WINDOW at its currently highlighted actionable item."
@@ -1168,6 +1204,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'action #'my-files-agent-shell--open-chat
      'my-files-agent-shell-buffer buffer
      'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-conversation-title title
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
@@ -1201,6 +1238,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'action #'my-files-agent-shell--open-codex-chat
      'my-files-agent-shell-codex-entry thread
      'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-conversation-title title
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
@@ -1479,6 +1517,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'action #'my-files-agent-shell--resume-chat
      'my-files-agent-shell-entry entry
      'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-conversation-title full-title
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'follow-link t
      'help-echo (format "%s\nResume %s session%s"
@@ -1956,6 +1995,7 @@ their requested space before the Conversations panel uses the remainder."
 (defun my-files-agent-shell-close ()
   "Close the browser and restore the previous window configuration."
   (interactive)
+  (my-files-agent-shell--clear-conversation-echo)
   (remove-hook 'buffer-list-update-hook
                #'my-files-agent-shell--buffer-list-updated)
   (remove-hook 'window-selection-change-functions

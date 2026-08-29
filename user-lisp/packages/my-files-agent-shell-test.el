@@ -909,15 +909,74 @@
                 (should (equal (button-get live-button 'help-echo)
                                (concat live-title
                                        "\nOpen this live conversation")))
+                (should
+                 (equal
+                  (button-get
+                   live-button 'my-files-agent-shell-conversation-title)
+                  live-title))
                 (should (equal (button-get saved-button 'help-echo)
                                (concat saved-full-title
                                        "\nResume Codex session from "
                                        "2026-08-29")))
+                (should
+                 (equal
+                  (button-get
+                   saved-button 'my-files-agent-shell-conversation-title)
+                  saved-full-title))
                 (should (equal (button-get codex-button 'help-echo)
                                (concat codex-title
                                        "\nResume this Codex task in "
-                                       "Agent Shell"))))))
+                                       "Agent Shell")))
+                (should
+                 (equal
+                  (button-get
+                   codex-button 'my-files-agent-shell-conversation-title)
+                  codex-title)))))
         (kill-buffer chat)))))
+
+(ert-deftest my-files-agent-shell-echoes-keyboard-highlighted-title ()
+  (let ((panel (generate-new-buffer " keyboard title panel"))
+        (other (generate-new-buffer " keyboard title other"))
+        (title "Complete keyboard-highlighted conversation title")
+        (my-files-agent-shell--echoed-conversation-title nil)
+        current-message-text)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let ((window (selected-window))
+                button-position)
+            (set-window-buffer window panel)
+            (with-current-buffer panel
+              (my-files-agent-shell-chat-mode)
+              (let ((inhibit-read-only t))
+                (insert-text-button
+                 "Clipped title"
+                 'my-files-agent-shell-conversation-title title))
+              (setq button-position
+                    (button-start (button-at (point-min))))
+              (should
+               (memq #'my-files-agent-shell--update-conversation-echo
+                     post-command-hook)))
+            (set-window-point window button-position)
+            (cl-letf (((symbol-function 'current-message)
+                       (lambda () current-message-text))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest arguments)
+                         (setq current-message-text
+                               (and format-string
+                                    (apply #'format format-string
+                                           arguments))))))
+              (my-files-agent-shell--update-conversation-echo)
+              (should (equal current-message-text title))
+              (should
+               (equal my-files-agent-shell--echoed-conversation-title
+                      title))
+              (set-window-buffer window other)
+              (my-files-agent-shell--update-conversation-echo)
+              (should-not current-message-text)
+              (should-not
+               my-files-agent-shell--echoed-conversation-title))))
+      (mapc #'kill-buffer (list panel other)))))
 
 (ert-deftest my-files-agent-shell-caches-saved-chat-metadata ()
   (my-files-agent-shell-test--with-tree
