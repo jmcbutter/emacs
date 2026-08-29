@@ -16,11 +16,12 @@
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel combines live `agent-shell'
-;; buffers, their saved transcripts, and non-archived Codex tasks whose
-;; working directories belong to the selected project or area.  Codex tasks
-;; resume in Agent Shell; saved metadata remains lazy until a row is opened.
-;; Busy chats and active Codex tasks are In Progress, idle or stored chats are
-;; Staged, and closed resumable agent-shell transcripts are Completed.
+;; buffers, their saved transcripts, and Codex tasks whose working directories
+;; belong to the selected project or area.  Every non-archived conversation
+;; appears in Active Conversations and in one user-assigned workflow stage:
+;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
+;; browser classification that leaves the conversation only under Archived.
+;; Runtime status remains visible on each row but never changes workflow stage.
 
 ;;; Code:
 
@@ -28,6 +29,7 @@
 (require 'button)
 (require 'cl-lib)
 (require 'hl-line)
+(require 'json)
 (require 'map)
 (require 'seq)
 (require 'subr-x)
@@ -96,6 +98,12 @@ discovery quick."
   :type 'number
   :group 'my-files-agent-shell)
 
+(defcustom my-files-agent-shell-state-file
+  (locate-user-emacs-file "var/my-files-agent-shell-state.json")
+  "File that stores user-assigned conversation stages and archive state."
+  :type 'file
+  :group 'my-files-agent-shell)
+
 (defcustom my-files-agent-shell-session-restore-verbosity 'first-last
   "How much prior chat history Agent Shell should render when resuming.
 
@@ -158,6 +166,10 @@ of the conversation to confirm that the correct session was restored."
 (defvar my-files-agent-shell--codex-error nil)
 (defvar my-files-agent-shell--codex-last-refresh-time nil)
 (defvar my-files-agent-shell--known-chat-buffers nil)
+(defvar my-files-agent-shell--conversation-states
+  (make-hash-table :test #'equal))
+(defvar my-files-agent-shell--conversation-states-loaded nil)
+(defvar my-files-agent-shell--conversation-state-load-error nil)
 (defvar my-files-agent-shell--transcript-metadata-cache
   (make-hash-table :test #'equal))
 (defvar-local my-files-agent-shell--subscribed-events nil)
@@ -165,12 +177,20 @@ of the conversation to confirm that the correct session was restored."
 (defvar-local my-files-agent-shell--assigned-project nil)
 (defvar-local my-files-agent-shell--highlighted-button-key nil)
 (defvar-local my-files-agent-shell--selected-path-button nil)
+(defvar my-files-agent-shell--rendering-section nil)
 
-(defconst my-files-agent-shell--chat-sections
+(defconst my-files-agent-shell--workflow-stages
   '((in-progress . "In Progress")
+    (review . "Review")
     (staged . "Staged")
     (completed . "Completed"))
-  "Chat categories in their display order.")
+  "User-assigned workflow stages in display order.")
+
+(defconst my-files-agent-shell--chat-sections
+  `((active . "Active Conversations")
+    ,@my-files-agent-shell--workflow-stages
+    (archived . "Archived"))
+  "Conversation sections in display order.")
 
 (defconst my-files-agent-shell--chat-refresh-events
   '(input-submitted
@@ -180,7 +200,7 @@ of the conversation to confirm that the correct session was restored."
     permission-response
     session-title-changed
     error)
-  "Agent-shell events that can change a chat row or category.")
+  "Agent-shell events that can change a chat row's operational status.")
 
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-cwd "agent-shell-project")
@@ -199,6 +219,179 @@ of the conversation to confirm that the correct session was restored."
 (defvar agent-shell--state)
 (defvar agent-shell-session-restore-verbosity)
 (defvar codex-ide-cli-path)
+
+(defun my-files-agent-shell--workflow-stage-p (stage)
+  "Return non-nil when STAGE is a supported workflow stage."
+  (and (assq stage my-files-agent-shell--workflow-stages) t))
+
+(defun my-files-agent-shell--workflow-stage-label (stage)
+  "Return the display label for workflow STAGE."
+  (or (alist-get stage my-files-agent-shell--workflow-stages)
+      (error "Unsupported conversation workflow stage: %S" stage)))
+
+(defun my-files-agent-shell--load-conversation-states ()
+  "Load persisted conversation states once and return their table."
+  (unless my-files-agent-shell--conversation-states-loaded
+    (setq my-files-agent-shell--conversation-states-loaded t
+          my-files-agent-shell--conversation-state-load-error nil)
+    (clrhash my-files-agent-shell--conversation-states)
+    (when (file-exists-p my-files-agent-shell-state-file)
+      (condition-case error-data
+          (with-temp-buffer
+            (insert-file-contents my-files-agent-shell-state-file)
+            (let* ((data
+                    (json-parse-buffer
+                     :object-type 'alist
+                     :array-type 'list
+                     :null-object nil
+                     :false-object :json-false))
+                   (version (alist-get 'version data))
+                   (conversations (alist-get 'conversations data))
+                   (seen (make-hash-table :test #'equal)))
+              (skip-chars-forward " \t\r\n")
+              (unless (eobp)
+                (error "Unexpected data after conversation state"))
+              (unless (equal version 1)
+                (error "Unsupported state version: %S" version))
+              (unless (listp conversations)
+                (error "Conversation state list is invalid"))
+              (dolist (entry conversations)
+                (let ((key (alist-get 'key entry))
+                      (stage-name (alist-get 'stage entry))
+                      (archived-value (alist-get 'archived entry)))
+                  (unless (and (stringp key)
+                               (not (string-empty-p key))
+                               (stringp stage-name)
+                               (memq archived-value '(:json-false t)))
+                    (error "Invalid conversation state: %S" entry))
+                  (when (gethash key seen)
+                    (error "Duplicate conversation state: %s" key))
+                  (let ((stage (intern-soft stage-name))
+                        (archived (eq archived-value t)))
+                    (unless (my-files-agent-shell--workflow-stage-p stage)
+                      (error "Invalid workflow stage for %s: %S" key stage))
+                    (puthash key t seen)
+                    (puthash key
+                             (list :stage stage :archived archived)
+                             my-files-agent-shell--conversation-states))))))
+        (error
+         (setq my-files-agent-shell--conversation-state-load-error
+               (error-message-string error-data))
+         (display-warning
+          'my-files-agent-shell
+          (format "Could not load %s: %s"
+                  my-files-agent-shell-state-file
+                  my-files-agent-shell--conversation-state-load-error)
+          :warning)))))
+  my-files-agent-shell--conversation-states)
+
+(defun my-files-agent-shell--conversation-state-data ()
+  "Return persisted conversation states in a deterministic form."
+  (let (conversations)
+    (maphash
+     (lambda (key state)
+       (push `((key . ,key)
+               (stage . ,(symbol-name (plist-get state :stage)))
+               (archived . ,(if (plist-get state :archived)
+                                t
+                              :json-false)))
+             conversations))
+     my-files-agent-shell--conversation-states)
+    `((version . 1)
+      (conversations
+       . ,(vconcat
+           (sort conversations
+                 (lambda (left right)
+                   (string< (alist-get 'key left)
+                            (alist-get 'key right)))))))))
+
+(defun my-files-agent-shell--save-conversation-states ()
+  "Atomically persist user-assigned conversation states."
+  (when my-files-agent-shell--conversation-state-load-error
+    (user-error
+     "Cannot overwrite unreadable conversation state: %s"
+     my-files-agent-shell--conversation-state-load-error))
+  (let* ((file (expand-file-name my-files-agent-shell-state-file))
+         (directory (file-name-directory file))
+         temp-file)
+    (make-directory directory t)
+    (setq temp-file
+          (make-temp-file
+           (expand-file-name ".my-files-agent-shell-state-" directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert
+             (json-serialize
+              (my-files-agent-shell--conversation-state-data)
+              :null-object nil
+              :false-object :json-false))
+            (insert "\n"))
+          (rename-file temp-file file t)
+          (setq temp-file nil)
+          (set-file-modes file #o600))
+      (when (and temp-file (file-exists-p temp-file))
+        (delete-file temp-file)))))
+
+(defun my-files-agent-shell--conversation-state (key)
+  "Return the persisted state for conversation KEY."
+  (my-files-agent-shell--load-conversation-states)
+  (or (and key (gethash key my-files-agent-shell--conversation-states))
+      '(:stage in-progress :archived nil)))
+
+(defun my-files-agent-shell--store-conversation-state (key state)
+  "Persist STATE for conversation KEY, rolling back on failure."
+  (unless key
+    (user-error "This conversation is still starting and has no stable ID"))
+  (let* ((missing (make-symbol "missing"))
+         (previous (gethash key my-files-agent-shell--conversation-states
+                            missing))
+         (default-state (equal state '(:stage in-progress :archived nil))))
+    (if default-state
+        (remhash key my-files-agent-shell--conversation-states)
+      (puthash key state my-files-agent-shell--conversation-states))
+    (condition-case error-data
+        (my-files-agent-shell--save-conversation-states)
+      (error
+       (if (eq previous missing)
+           (remhash key my-files-agent-shell--conversation-states)
+         (puthash key previous my-files-agent-shell--conversation-states))
+       (signal (car error-data) (cdr error-data))))))
+
+(defun my-files-agent-shell--set-conversation-stage (key stage)
+  "Assign workflow STAGE to conversation KEY."
+  (unless (my-files-agent-shell--workflow-stage-p stage)
+    (error "Unsupported conversation workflow stage: %S" stage))
+  (let ((state (copy-sequence
+                (my-files-agent-shell--conversation-state key))))
+    (my-files-agent-shell--store-conversation-state
+     key (plist-put state :stage stage))))
+
+(defun my-files-agent-shell--set-conversation-archived (key archived)
+  "Set conversation KEY's archive state to ARCHIVED."
+  (let ((state (copy-sequence
+                (my-files-agent-shell--conversation-state key))))
+    (my-files-agent-shell--store-conversation-state
+     key (plist-put state :archived (and archived t)))))
+
+(defun my-files-agent-shell--conversation-key (kind identifier)
+  "Return a stable conversation key for KIND and IDENTIFIER."
+  (when identifier
+    (format "%s:%s" kind identifier)))
+
+(defun my-files-agent-shell--live-conversation-key (buffer)
+  "Return the stable conversation key for live Agent Shell BUFFER."
+  (my-files-agent-shell--conversation-key
+   'agent (my-files-agent-shell--live-session-id buffer)))
+
+(defun my-files-agent-shell--saved-conversation-key (entry)
+  "Return the stable conversation key for saved transcript ENTRY."
+  (my-files-agent-shell--conversation-key
+   'agent (plist-get entry :session-id)))
+
+(defun my-files-agent-shell--codex-conversation-key (thread)
+  "Return the stable conversation key for Codex THREAD."
+  (my-files-agent-shell--conversation-key 'codex (alist-get 'id thread)))
 
 (defvar-keymap my-files-agent-shell-mode-map
   :doc "Keymap shared by My Files browser panels."
@@ -219,6 +412,8 @@ of the conversation to confirm that the correct session was restored."
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
   "a" #'my-files-agent-shell-archive-at-point
+  "m" #'my-files-agent-shell-move-at-point
+  "u" #'my-files-agent-shell-restore-at-point
   "RET" #'push-button
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
@@ -260,6 +455,10 @@ of the conversation to confirm that the correct session was restored."
 (defun my-files-agent-shell--button-selection-key (button)
   "Return a stable selection key for primary BUTTON, or nil."
   (cond
+   ((button-get button 'my-files-agent-shell-conversation-key)
+    (list 'conversation
+          (button-get button 'my-files-agent-shell-conversation-key)
+          (button-get button 'my-files-agent-shell-section)))
    ((button-get button 'my-files-agent-shell-path)
     (list 'path (button-get button 'my-files-agent-shell-path)))
    ((button-get button 'my-files-agent-shell-buffer)
@@ -295,16 +494,29 @@ of the conversation to confirm that the correct session was restored."
 (defun my-files-agent-shell--restore-button-selection (key)
   "Restore point to the visible primary button matching KEY."
   (goto-char (point-min))
-  (let ((button
-         (and key
-              (seq-find
-               (lambda (candidate)
-                 (equal (my-files-agent-shell--button-selection-key
-                         candidate)
-                        key))
-               (my-files-agent-shell--visible-buttons)))))
+  (let* ((buttons (my-files-agent-shell--visible-buttons))
+         (conversation-key
+          (and (eq (car-safe key) 'conversation) (nth 1 key)))
+         (button
+          (and key
+               (or (seq-find
+                    (lambda (candidate)
+                      (equal (my-files-agent-shell--button-selection-key
+                              candidate)
+                             key))
+                    buttons)
+                   (and conversation-key
+                        (seq-find
+                         (lambda (candidate)
+                           (equal
+                            (button-get
+                             candidate
+                             'my-files-agent-shell-conversation-key)
+                            conversation-key))
+                         buttons))))))
     (setq my-files-agent-shell--highlighted-button-key
-          (and button key))
+          (and button
+               (my-files-agent-shell--button-selection-key button)))
     (when button
       (goto-char (button-start button)))))
 
@@ -579,12 +791,6 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
   "Return THREAD's Codex status as a string."
   (let ((status (alist-get 'type (alist-get 'status thread))))
     (if status (format "%s" status) "notLoaded")))
-
-(defun my-files-agent-shell--codex-thread-category (thread)
-  "Return the workflow category for Codex THREAD."
-  (if (string= (my-files-agent-shell--codex-thread-status thread) "active")
-      'in-progress
-    'staged))
 
 (defun my-files-agent-shell--codex-thread-title (thread)
   "Return a concise display title for Codex THREAD."
@@ -899,15 +1105,54 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   "Return a display status for agent-shell BUFFER."
   (symbol-name (my-files-agent-shell--chat-status-symbol buffer)))
 
-(defun my-files-agent-shell--chat-category (buffer)
-  "Return the workflow category for live agent-shell BUFFER."
-  (if (eq (my-files-agent-shell--chat-status-symbol buffer) 'ready)
-      'staged
-    'in-progress))
+(defun my-files-agent-shell--conversation-stage (key)
+  "Return conversation KEY's user-assigned workflow stage."
+  (plist-get (my-files-agent-shell--conversation-state key) :stage))
+
+(defun my-files-agent-shell--conversation-archived-p (key)
+  "Return non-nil when conversation KEY is archived."
+  (plist-get (my-files-agent-shell--conversation-state key) :archived))
+
+(defun my-files-agent-shell--insert-conversation-action
+    (label action key help)
+  "Insert a secondary LABEL button invoking ACTION for KEY with HELP text."
+  (insert "  ")
+  (insert-text-button
+   label
+   'action action
+   'my-files-agent-shell-conversation-key key
+   'my-files-agent-shell-section my-files-agent-shell--rendering-section
+   'my-files-agent-shell-secondary-action t
+   'follow-link t
+   'help-echo help
+   'face 'my-files-agent-shell-muted))
+
+(defun my-files-agent-shell--insert-conversation-actions (key)
+  "Insert workflow and visibility actions for conversation KEY."
+  (let ((stage (my-files-agent-shell--conversation-stage key))
+        (archived (my-files-agent-shell--conversation-archived-p key)))
+    (insert (propertize
+             (format "  {%s}"
+                     (my-files-agent-shell--workflow-stage-label stage))
+             'face 'my-files-agent-shell-muted))
+    (if (not key)
+        (insert (propertize "  Waiting for session ID"
+                            'face 'my-files-agent-shell-muted))
+      (my-files-agent-shell--insert-conversation-action
+       "Move" #'my-files-agent-shell--move-conversation-button key
+       "Assign a workflow stage")
+      (if archived
+          (my-files-agent-shell--insert-conversation-action
+           "Restore" #'my-files-agent-shell--restore-conversation-button key
+           "Return this conversation to Active Conversations")
+        (my-files-agent-shell--insert-conversation-action
+         "Archive" #'my-files-agent-shell--archive-conversation-button key
+         "Show this conversation only under Archived")))))
 
 (defun my-files-agent-shell--insert-chat-button (buffer)
   "Insert a button that opens agent-shell BUFFER."
   (let* ((title (my-files-agent-shell--chat-title buffer))
+         (key (my-files-agent-shell--live-conversation-key buffer))
          (status-label (concat "[" (my-files-agent-shell--chat-status buffer)
                                "]")))
     (insert " ")
@@ -915,20 +1160,13 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      (format "%s %s" status-label title)
      'action #'my-files-agent-shell--open-chat
      'my-files-agent-shell-buffer buffer
+     'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
      'help-echo (format "Open %s" (buffer-name buffer))
      'face 'default)
-    (insert "  ")
-    (insert-text-button
-     "Archive"
-     'action #'my-files-agent-shell--archive-chat
-     'my-files-agent-shell-buffer buffer
-     'my-files-agent-shell-action 'archive
-     'my-files-agent-shell-secondary-action t
-     'follow-link t
-     'help-echo "Close this staged chat and keep its saved transcript"
-     'face 'my-files-agent-shell-muted)
+    (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
 (defun my-files-agent-shell--open-chat (button)
@@ -942,29 +1180,10 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
     (set-window-buffer my-files-agent-shell--main-window buffer)
     (select-window my-files-agent-shell--main-window)))
 
-(defun my-files-agent-shell--archive-chat (button)
-  "Archive the staged agent-shell buffer represented by BUTTON.
-
-Archiving closes the live buffer.  Its saved transcript remains available
-in the Completed section.  Active chats must finish or be interrupted first."
-  (let ((buffer (button-get button 'my-files-agent-shell-buffer)))
-    (unless (buffer-live-p buffer)
-      (my-files-agent-shell--schedule-refresh)
-      (user-error "That agent chat is no longer open"))
-    (unless (eq (my-files-agent-shell--chat-status-symbol buffer) 'ready)
-      (user-error
-       "Only staged chats can be archived; wait for it to finish or interrupt it"))
-    (let ((title (my-files-agent-shell--chat-title buffer)))
-      (when (yes-or-no-p
-             (format "Archive %s and close its live buffer? " title))
-        (unless (kill-buffer buffer)
-          (user-error "Could not archive %s" title))
-        (my-files-agent-shell--schedule-refresh)
-        (message "Archived %s; its saved transcript is under Completed" title)))))
-
 (defun my-files-agent-shell--insert-codex-chat-button (thread)
-  "Insert buttons that open and archive Codex THREAD."
+  "Insert a workflow-controlled row for Codex THREAD."
   (let* ((title (my-files-agent-shell--codex-thread-title thread))
+         (key (my-files-agent-shell--codex-conversation-key thread))
          (status (my-files-agent-shell--codex-thread-status thread))
          (status-label (if (string= status "active")
                            "[codex:active]"
@@ -974,20 +1193,13 @@ in the Completed section.  Active chats must finish or be interrupted first."
      (format "%s %s" status-label title)
      'action #'my-files-agent-shell--open-codex-chat
      'my-files-agent-shell-codex-entry thread
+     'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
      'help-echo "Resume this Codex task in Agent Shell"
      'face 'default)
-    (insert "  ")
-    (insert-text-button
-     "Archive"
-     'action #'my-files-agent-shell--archive-codex-chat
-     'my-files-agent-shell-codex-thread thread
-     'my-files-agent-shell-action 'archive
-     'my-files-agent-shell-secondary-action t
-     'follow-link t
-     'help-echo "Archive this Codex task"
-     'face 'my-files-agent-shell-muted)
+    (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
 (defun my-files-agent-shell--open-codex-chat (button)
@@ -1002,54 +1214,79 @@ in the Completed section.  Active chats must finish or be interrupted first."
     (my-files-agent-shell--start-resumed-chat
      thread-id "Codex" directory)))
 
-(defun my-files-agent-shell--request-codex-archive (thread)
-  "Archive Codex THREAD and remove it from the pane after success."
-  (unless (and my-files-agent-shell--codex-session-initialized
-               (my-files-agent-shell--codex-session-live-p))
-    (user-error "Codex task service is not ready; refresh the pane and retry"))
-  (let ((thread-id (alist-get 'id thread))
-        (title (my-files-agent-shell--codex-thread-title thread)))
-    (codex-ide--request-async
-     my-files-agent-shell--codex-session
-     "thread/archive"
-     `((threadId . ,thread-id))
-     (lambda (_result error-data)
-       (if error-data
-           (progn
-             (setq my-files-agent-shell--codex-error
-                   (my-files-agent-shell--codex-error-text error-data))
-             (my-files-agent-shell--schedule-refresh)
-             (message "Could not archive %s: %s"
-                      title my-files-agent-shell--codex-error))
-         (setq my-files-agent-shell--codex-threads
-               (seq-remove
-                (lambda (entry)
-                  (equal (alist-get 'id entry) thread-id))
-                my-files-agent-shell--codex-threads))
-         (my-files-agent-shell--schedule-refresh)
-         (message "Archived Codex task %s" title))))))
+(defun my-files-agent-shell--conversation-key-at-point ()
+  "Return the stable key of the highlighted conversation."
+  (or (and-let* ((button (button-at (point))))
+        (button-get button 'my-files-agent-shell-conversation-key))
+      (user-error "Highlight a conversation with a stable session ID first")))
 
-(defun my-files-agent-shell--archive-codex-chat (button)
-  "Archive the Codex task represented by BUTTON."
-  (let* ((thread (or (button-get button 'my-files-agent-shell-codex-thread)
-                     (button-get button 'my-files-agent-shell-codex-entry)))
-         (title (my-files-agent-shell--codex-thread-title thread)))
-    (when (yes-or-no-p (format "Archive Codex task %s? " title))
-      (my-files-agent-shell--request-codex-archive thread))))
+(defun my-files-agent-shell--read-workflow-stage (current)
+  "Prompt for a workflow stage, defaulting to CURRENT."
+  (let* ((labels (mapcar #'cdr my-files-agent-shell--workflow-stages))
+         (current-label (my-files-agent-shell--workflow-stage-label current))
+         (selected
+          (completing-read "Move conversation to: " labels nil t nil nil
+                           current-label)))
+    (car (rassoc selected my-files-agent-shell--workflow-stages))))
+
+(defun my-files-agent-shell--move-conversation (key)
+  "Prompt for and persist conversation KEY's workflow stage."
+  (let* ((current (my-files-agent-shell--conversation-stage key))
+         (stage (my-files-agent-shell--read-workflow-stage current)))
+    (unless (eq current stage)
+      (my-files-agent-shell--set-conversation-stage key stage)
+      (my-files-agent-shell--schedule-refresh)
+      (message "Moved conversation to %s"
+               (my-files-agent-shell--workflow-stage-label stage)))))
+
+(defun my-files-agent-shell--move-conversation-button (button)
+  "Move the conversation represented by BUTTON to a workflow stage."
+  (my-files-agent-shell--move-conversation
+   (button-get button 'my-files-agent-shell-conversation-key)))
+
+(defun my-files-agent-shell-move-at-point ()
+  "Move the highlighted conversation to a user-selected workflow stage."
+  (interactive)
+  (my-files-agent-shell--move-conversation
+   (my-files-agent-shell--conversation-key-at-point)))
 
 (defun my-files-agent-shell-archive-at-point ()
-  "Archive the highlighted staged Agent Shell chat or Codex task."
+  "Show the highlighted conversation only under Archived."
   (interactive)
-  (let ((button (button-at (point))))
-    (cond
-     ((and button (button-get button 'my-files-agent-shell-buffer))
-      (my-files-agent-shell--archive-chat button))
-     ((and button (button-get button 'my-files-agent-shell-codex-entry))
-      (my-files-agent-shell--archive-codex-chat button))
-     ((and button (button-get button 'my-files-agent-shell-entry))
-      (user-error "That conversation is already under Completed"))
-     (t
-      (user-error "Highlight a staged Agent Shell chat or Codex task first")))))
+  (let ((key (my-files-agent-shell--conversation-key-at-point)))
+    (when (my-files-agent-shell--conversation-archived-p key)
+      (user-error "That conversation is already archived"))
+    (when (yes-or-no-p "Archive this conversation? ")
+      (my-files-agent-shell--set-conversation-archived key t)
+      (my-files-agent-shell--schedule-refresh)
+      (message "Archived conversation"))))
+
+(defun my-files-agent-shell--archive-conversation-button (button)
+  "Archive the conversation represented by BUTTON."
+  (let ((key (button-get button 'my-files-agent-shell-conversation-key)))
+    (when (yes-or-no-p "Archive this conversation? ")
+      (my-files-agent-shell--set-conversation-archived key t)
+      (my-files-agent-shell--schedule-refresh)
+      (message "Archived conversation"))))
+
+(defun my-files-agent-shell--restore-conversation (key)
+  "Restore archived conversation KEY to the active lists."
+  (unless (my-files-agent-shell--conversation-archived-p key)
+    (user-error "That conversation is not archived"))
+  (my-files-agent-shell--set-conversation-archived key nil)
+  (my-files-agent-shell--schedule-refresh)
+  (message "Restored conversation"))
+
+(defun my-files-agent-shell--restore-conversation-button (button)
+  "Restore the archived conversation represented by BUTTON."
+  (my-files-agent-shell--restore-conversation
+   (button-get button 'my-files-agent-shell-conversation-key)))
+
+(defun my-files-agent-shell-restore-at-point ()
+  "Restore the highlighted archived conversation."
+  (interactive)
+  (my-files-agent-shell--restore-conversation
+   (my-files-agent-shell--conversation-key-at-point)))
 
 (defun my-files-agent-shell--agent-config (agent-name)
   "Return the installed agent-shell config matching AGENT-NAME."
@@ -1223,7 +1460,8 @@ in the Completed section.  Active chats must finish or be interrupted first."
 
 (defun my-files-agent-shell--insert-saved-chat-button (entry)
   "Insert a button that resumes saved chat ENTRY."
-  (let ((title (plist-get entry :title))
+  (let ((key (my-files-agent-shell--saved-conversation-key entry))
+        (title (plist-get entry :title))
         (agent (or (plist-get entry :agent) "Agent"))
         (started (plist-get entry :started)))
     (insert " ")
@@ -1231,12 +1469,66 @@ in the Completed section.  Active chats must finish or be interrupted first."
      (format "%-8s %s" "[saved]" title)
      'action #'my-files-agent-shell--resume-chat
      'my-files-agent-shell-entry entry
+     'my-files-agent-shell-conversation-key key
+     'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'follow-link t
      'help-echo (format "Resume %s session%s"
                         agent
                         (if started (format " from %s" started) ""))
      'face 'default)
+    (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
+
+(defun my-files-agent-shell--conversation-records
+    (chats saved-chats codex-threads)
+  "Return normalized records for CHATS, SAVED-CHATS, and CODEX-THREADS."
+  (append
+   (mapcar
+    (lambda (chat)
+      (my-files-agent-shell--subscribe-chat chat)
+      (list :kind 'live
+            :value chat
+            :key (my-files-agent-shell--live-conversation-key chat)))
+    chats)
+   (mapcar
+    (lambda (entry)
+      (list :kind 'saved
+            :value entry
+            :key (my-files-agent-shell--saved-conversation-key entry)))
+    saved-chats)
+   (mapcar
+    (lambda (thread)
+      (list :kind 'codex
+            :value thread
+            :key (my-files-agent-shell--codex-conversation-key thread)))
+    codex-threads)))
+
+(defun my-files-agent-shell--records-for-section (section records)
+  "Return RECORDS belonging to conversation SECTION."
+  (seq-filter
+   (lambda (record)
+     (let* ((key (plist-get record :key))
+            (archived (my-files-agent-shell--conversation-archived-p key)))
+       (pcase section
+         ('active (not archived))
+         ('archived archived)
+         (_ (and (not archived)
+                 (eq (my-files-agent-shell--conversation-stage key)
+                     section))))))
+   records))
+
+(defun my-files-agent-shell--insert-conversation-record (record)
+  "Insert normalized conversation RECORD."
+  (pcase (plist-get record :kind)
+    ('live
+     (my-files-agent-shell--insert-chat-button (plist-get record :value)))
+    ('saved
+     (my-files-agent-shell--insert-saved-chat-button
+      (plist-get record :value)))
+    ('codex
+     (my-files-agent-shell--insert-codex-chat-button
+      (plist-get record :value)))
+    (_ (error "Unsupported conversation record: %S" record))))
 
 (defun my-files-agent-shell--chat-section-collapsed-p (category)
   "Return non-nil when chat CATEGORY is collapsed in this buffer."
@@ -1290,7 +1582,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
     (insert "\n")
     (let ((body-start (point)))
       (if (> count 0)
-          (funcall insert-items)
+          (let ((my-files-agent-shell--rendering-section category))
+            (funcall insert-items))
         (my-files-agent-shell--insert-empty "No chats"))
       (insert "\n")
       (let ((body (make-overlay body-start (point) nil t nil)))
@@ -1336,56 +1629,26 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                    'face 'font-lock-keyword-face)
                   (insert "\n"))))
             (my-files-agent-shell--insert-empty
-             "Archive: highlight a staged or Codex chat and press a")
+             "m moves stage · a archives · u restores")
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
                        my-files-agent-shell--codex-error)))
             (insert "\n")
-            (let (in-progress staged in-progress-codex staged-codex)
-              (dolist (chat chats)
-                (my-files-agent-shell--subscribe-chat chat)
-                (if (eq (my-files-agent-shell--chat-category chat) 'staged)
-                    (push chat staged)
-                  (push chat in-progress)))
-              (dolist (thread codex-threads)
-                (if (eq (my-files-agent-shell--codex-thread-category thread)
-                        'in-progress)
-                    (push thread in-progress-codex)
-                  (push thread staged-codex)))
-              (setq in-progress (nreverse in-progress)
-                    staged (nreverse staged)
-                    in-progress-codex (nreverse in-progress-codex)
-                    staged-codex (nreverse staged-codex))
+            (let ((records
+                   (my-files-agent-shell--conversation-records
+                    chats saved-chats codex-threads)))
               (dolist (section my-files-agent-shell--chat-sections)
-                (pcase (car section)
-                  ('in-progress
-                   (my-files-agent-shell--insert-chat-section
-                    'in-progress (cdr section)
-                    (+ (length in-progress) (length in-progress-codex))
-                    (lambda ()
-                      (dolist (chat in-progress)
-                        (my-files-agent-shell--insert-chat-button chat))
-                      (dolist (thread in-progress-codex)
-                        (my-files-agent-shell--insert-codex-chat-button
-                         thread)))))
-                  ('staged
-                   (my-files-agent-shell--insert-chat-section
-                    'staged (cdr section)
-                    (+ (length staged) (length staged-codex))
-                    (lambda ()
-                      (dolist (chat staged)
-                        (my-files-agent-shell--insert-chat-button chat))
-                      (dolist (thread staged-codex)
-                        (my-files-agent-shell--insert-codex-chat-button
-                         thread)))))
-                  ('completed
-                   (my-files-agent-shell--insert-chat-section
-                    'completed (cdr section) (length saved-chats)
-                    (lambda ()
-                      (dolist (entry saved-chats)
-                        (my-files-agent-shell--insert-saved-chat-button
-                         entry)))))))))
+                (let* ((category (car section))
+                       (section-records
+                        (my-files-agent-shell--records-for-section
+                         category records)))
+                  (my-files-agent-shell--insert-chat-section
+                   category (cdr section) (length section-records)
+                   (lambda ()
+                     (dolist (record section-records)
+                       (my-files-agent-shell--insert-conversation-record
+                        record))))))))
         (my-files-agent-shell--insert-empty "Select an area"))
       (my-files-agent-shell--restore-button-selection selection-key))))
 
