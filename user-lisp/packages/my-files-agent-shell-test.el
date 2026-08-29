@@ -455,11 +455,38 @@
         (my-files-agent-shell-chat-width 40)
         (my-files-agent-shell-minimum-panel-width 10)
         (my-files-agent-shell-minimum-main-width 40))
-    (should (equal (my-files-agent-shell--scaled-panel-widths 150)
-                   '(20 30 40)))
+    (should
+     (equal (my-files-agent-shell--scaled-panel-widths
+             150 '(12 14 16))
+            '(12 14 16)))
+    (let ((scaled (my-files-agent-shell--scaled-panel-widths 150)))
+      (should (= (apply #'+ scaled) 75))
+      (should (seq-every-p (lambda (width) (>= width 10)) scaled)))
     (let ((scaled (my-files-agent-shell--scaled-panel-widths 100)))
-      (should (= (apply #'+ scaled) 60))
+      (should (= (apply #'+ scaled) 50))
       (should (seq-every-p (lambda (width) (>= width 10)) scaled)))))
+
+(ert-deftest my-files-agent-shell-sizes-panels-from-visible-text ()
+  (let* ((area-name " *My Files Width Test Areas*")
+         (project-name " *My Files Width Test Projects*")
+         (chat-name " *My Files Width Test Chats*")
+         (my-files-agent-shell--area-buffer-name area-name)
+         (my-files-agent-shell--project-buffer-name project-name)
+         (my-files-agent-shell--chat-buffer-name chat-name)
+         (my-files-agent-shell-area-width 5)
+         (my-files-agent-shell-project-width 5)
+         (my-files-agent-shell-chat-width 5))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create area-name)
+            (insert "1234567890"))
+          (with-current-buffer (get-buffer-create project-name)
+            (insert "123456789012345"))
+          (with-current-buffer (get-buffer-create chat-name)
+            (insert "12345678901234567890"))
+          (should (equal (my-files-agent-shell--desired-panel-widths)
+                         '(11 16 21))))
+      (mapc #'kill-buffer (list area-name project-name chat-name)))))
 
 (ert-deftest my-files-agent-shell-requires-compatible-shell-maker ()
   (should (fboundp 'shell-maker-start-v2)))
@@ -468,7 +495,8 @@
   (dolist (binding '(("C-n" . my-files-agent-shell-next-item)
                      ("C-p" . my-files-agent-shell-previous-item)
                      ("C-f" . my-files-agent-shell-next-panel)
-                     ("C-b" . my-files-agent-shell-previous-panel)))
+                     ("C-b" . my-files-agent-shell-previous-panel)
+                     ("a" . my-files-agent-shell-archive-at-point)))
     (should (eq (keymap-lookup my-files-agent-shell-mode-map (car binding))
                 (cdr binding))))
   (dolist (key '("h" "j" "k" "l"))
@@ -484,7 +512,36 @@
     (my-files-agent-shell-mode)
     (should hl-line-mode)
     (should (local-variable-p 'hl-line-sticky-flag))
-    (should-not hl-line-sticky-flag)))
+    (should hl-line-sticky-flag)
+    (should (eq hl-line-face 'my-files-agent-shell-cursor-inactive))))
+
+(ert-deftest my-files-agent-shell-archives-highlighted-chat-with-a ()
+  (let ((chat (generate-new-buffer " highlighted chat to archive"))
+        (my-files-agent-shell--selected-project default-directory)
+        archived)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'my-files-agent-shell--chat-status-symbol)
+                   (lambda (_buffer) 'ready))
+                  ((symbol-function 'my-files-agent-shell--chat-title)
+                   #'buffer-name)
+                  ((symbol-function 'my-files-agent-shell--subscribe-chat)
+                   #'ignore)
+                  ((symbol-function 'my-files-agent-shell--archive-chat)
+                   (lambda (button)
+                     (setq archived
+                           (button-get
+                            button 'my-files-agent-shell-buffer)))))
+          (my-files-agent-shell--render-chat-lists (list chat) nil)
+          (with-current-buffer my-files-agent-shell--chat-buffer-name
+            (goto-char
+             (button-start
+              (my-files-agent-shell-test--button-with-property
+               'my-files-agent-shell-buffer chat)))
+            (my-files-agent-shell-archive-at-point))
+          (should (eq archived chat)))
+      (when (buffer-live-p chat)
+        (kill-buffer chat)))))
 
 (ert-deftest my-files-agent-shell-panels-remain-resizable ()
   (with-temp-buffer
@@ -494,7 +551,8 @@
 (ert-deftest my-files-agent-shell-keyboard-navigation-crosses-columns ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((area (expand-file-name "Work" root))
-           (project (expand-file-name "Project" area))
+           (project (file-name-as-directory
+                     (expand-file-name "Project" area)))
            (configuration (current-window-configuration)))
       (make-directory project t)
       (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
@@ -508,12 +566,50 @@
             (my-files-agent-shell-open)
             (should (eq (selected-window)
                         my-files-agent-shell--area-window))
+            (let* ((windows (list my-files-agent-shell--area-window
+                                  my-files-agent-shell--project-window
+                                  my-files-agent-shell--chat-window
+                                  my-files-agent-shell--main-window))
+                   (total (apply #'+ (mapcar #'window-total-width windows)))
+                   (panels (apply #'+
+                                  (mapcar #'window-total-width
+                                          (butlast windows)))))
+              (should (<= panels (floor total 2))))
+            (with-current-buffer my-files-agent-shell--area-buffer-name
+              (should
+               (eq (button-get
+                    (my-files-agent-shell-test--button-with-property
+                     'my-files-agent-shell-selected t)
+                    'face)
+                   'my-files-agent-shell-selected)))
             (my-files-agent-shell-next-panel)
             (should (eq (selected-window)
                         my-files-agent-shell--project-window))
+            (with-current-buffer my-files-agent-shell--area-buffer-name
+              (should
+               (eq (button-get
+                    (my-files-agent-shell-test--button-with-property
+                     'my-files-agent-shell-selected t)
+                    'face)
+                   'my-files-agent-shell-selected-inactive)))
+            (my-files-agent-shell-next-item)
+            (should
+             (equal (button-get (button-at (point))
+                                'my-files-agent-shell-path)
+                    project))
             (my-files-agent-shell-next-panel)
             (should (eq (selected-window)
                         my-files-agent-shell--chat-window))
+            (set-window-point my-files-agent-shell--project-window
+                              (point-min))
+            (my-files-agent-shell-previous-panel)
+            (should (eq (selected-window)
+                        my-files-agent-shell--project-window))
+            (should
+             (equal (button-get (button-at (point))
+                                'my-files-agent-shell-path)
+                    project))
+            (my-files-agent-shell-next-panel)
             (my-files-agent-shell-next-panel)
             (should (eq (selected-window)
                         my-files-agent-shell--main-window))

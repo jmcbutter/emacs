@@ -27,6 +27,7 @@
 (require 'agent-shell)
 (require 'button)
 (require 'cl-lib)
+(require 'hl-line)
 (require 'map)
 (require 'seq)
 (require 'subr-x)
@@ -116,6 +117,22 @@ of the conversation to confirm that the correct session was restored."
   "Face used for the selected area and project."
   :group 'my-files-agent-shell)
 
+(defface my-files-agent-shell-selected-inactive
+  '((((class color) (background light))
+     :background "gray90" :weight bold)
+    (((class color) (background dark))
+     :background "gray25" :weight bold)
+    (t :inherit shadow :weight bold))
+  "Face used for a selected item in an unfocused panel."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-cursor-inactive
+  '((((class color) (background light)) :background "gray92" :extend t)
+    (((class color) (background dark)) :background "gray22" :extend t)
+    (t :inherit shadow :extend t))
+  "Face used for the keyboard cursor row in an unfocused panel."
+  :group 'my-files-agent-shell)
+
 (defface my-files-agent-shell-muted
   '((t :inherit shadow))
   "Face used for secondary and empty-state text."
@@ -146,6 +163,8 @@ of the conversation to confirm that the correct session was restored."
 (defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 (defvar-local my-files-agent-shell--assigned-project nil)
+(defvar-local my-files-agent-shell--highlighted-button-key nil)
+(defvar-local my-files-agent-shell--selected-path-button nil)
 
 (defconst my-files-agent-shell--chat-sections
   '((in-progress . "In Progress")
@@ -199,6 +218,7 @@ of the conversation to confirm that the correct session was restored."
   "2" #'my-files-agent-shell-focus-projects
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
+  "a" #'my-files-agent-shell-archive-at-point
   "RET" #'push-button
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
@@ -208,8 +228,11 @@ of the conversation to confirm that the correct session was restored."
   (setq-local truncate-lines t
               cursor-type nil
               mode-line-format nil
-              hl-line-sticky-flag nil)
-  (hl-line-mode 1))
+              hl-line-sticky-flag t
+              hl-line-face 'my-files-agent-shell-cursor-inactive)
+  (hl-line-mode 1)
+  (add-hook 'post-command-hook
+            #'my-files-agent-shell--remember-panel-selection nil t))
 
 (define-derived-mode my-files-agent-shell-area-mode
   my-files-agent-shell-mode "Areas"
@@ -257,20 +280,32 @@ of the conversation to confirm that the correct session was restored."
 
 (defun my-files-agent-shell--selected-button-key ()
   "Return the current primary button's stable selection key, or nil."
+  (or (when-let* ((button (button-at (point))))
+        (unless (button-get button 'my-files-agent-shell-secondary-action)
+          (my-files-agent-shell--button-selection-key button)))
+      my-files-agent-shell--highlighted-button-key))
+
+(defun my-files-agent-shell--remember-panel-selection ()
+  "Remember the primary button currently highlighted in this panel."
   (when-let* ((button (button-at (point))))
-    (my-files-agent-shell--button-selection-key button)))
+    (unless (button-get button 'my-files-agent-shell-secondary-action)
+      (setq my-files-agent-shell--highlighted-button-key
+            (my-files-agent-shell--button-selection-key button)))))
 
 (defun my-files-agent-shell--restore-button-selection (key)
   "Restore point to the visible primary button matching KEY."
   (goto-char (point-min))
-  (when key
-    (when-let* ((button
-                 (seq-find
-                  (lambda (candidate)
-                    (equal (my-files-agent-shell--button-selection-key
-                            candidate)
-                           key))
-                  (my-files-agent-shell--visible-buttons))))
+  (let ((button
+         (and key
+              (seq-find
+               (lambda (candidate)
+                 (equal (my-files-agent-shell--button-selection-key
+                         candidate)
+                        key))
+               (my-files-agent-shell--visible-buttons)))))
+    (setq my-files-agent-shell--highlighted-button-key
+          (and button key))
+    (when button
       (goto-char (button-start button)))))
 
 (defun my-files-agent-shell--move-item (direction)
@@ -287,7 +322,8 @@ of the conversation to confirm that the correct session was restored."
                (< (button-start button) position)))
            ordered)))
     (when-let* ((button (or candidate (car ordered))))
-      (goto-char (button-start button)))))
+      (goto-char (button-start button))
+      (my-files-agent-shell--remember-panel-selection))))
 
 (defun my-files-agent-shell-next-item ()
   "Move to the next actionable item, wrapping within the panel."
@@ -299,15 +335,64 @@ of the conversation to confirm that the correct session was restored."
   (interactive)
   (my-files-agent-shell--move-item -1))
 
+(defun my-files-agent-shell--preferred-panel-button ()
+  "Return the primary button that should receive focus in this panel."
+  (let ((buttons (my-files-agent-shell--visible-buttons)))
+    (or (and my-files-agent-shell--highlighted-button-key
+             (seq-find
+              (lambda (button)
+                (equal (my-files-agent-shell--button-selection-key button)
+                       my-files-agent-shell--highlighted-button-key))
+              buttons))
+        (and-let* ((button (button-at (point))))
+          (and (memq button buttons) button))
+        (seq-find
+         (lambda (button)
+           (button-get button 'my-files-agent-shell-selected))
+         buttons)
+        (car buttons))))
+
+(defun my-files-agent-shell--update-panel-focus-faces (&optional frame)
+  "Update active and inactive panel faces for FRAME."
+  (let ((selected (frame-selected-window (or frame (selected-frame)))))
+    (dolist (window (list my-files-agent-shell--area-window
+                          my-files-agent-shell--project-window
+                          my-files-agent-shell--chat-window))
+      (when (window-live-p window)
+        (with-current-buffer (window-buffer window)
+          (let ((active (eq window selected))
+                (inhibit-read-only t))
+            (setq-local hl-line-face
+                        (if active
+                            'hl-line
+                          'my-files-agent-shell-cursor-inactive))
+            (when (overlayp hl-line-overlay)
+              (overlay-put hl-line-overlay 'face hl-line-face))
+            (when my-files-agent-shell--selected-path-button
+              (button-put
+               my-files-agent-shell--selected-path-button 'face
+               (if active
+                   'my-files-agent-shell-selected
+                 'my-files-agent-shell-selected-inactive)))))))))
+
 (defun my-files-agent-shell--focus-window (window)
-  "Select WINDOW and place point on its first actionable item."
+  "Select WINDOW at its currently highlighted actionable item."
   (unless (window-live-p window)
     (user-error "The My Files browser is not open"))
-  (select-window window)
-  (when (window-parameter window 'my-files-agent-shell-panel)
-    (unless (button-at (point))
-      (when-let* ((button (next-button (point-min))))
-        (goto-char (button-start button))))))
+  (let* ((panel (window-parameter window 'my-files-agent-shell-panel))
+         (position
+          (and panel
+               (with-current-buffer (window-buffer window)
+                 (when-let* ((button
+                              (my-files-agent-shell--preferred-panel-button)))
+                   (button-start button))))))
+    (when position
+      (set-window-point window position))
+    (select-window window)
+    (when position
+      (goto-char position)
+      (my-files-agent-shell--remember-panel-selection))
+    (my-files-agent-shell--update-panel-focus-faces)))
 
 ;;;###autoload
 (defun my-files-agent-shell-focus-browser ()
@@ -767,13 +852,18 @@ When FORCE is non-nil, ignore the normal refresh interval."
 
 SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   (insert " ")
-  (insert-text-button
-   (concat (if selected "● " "  ") label)
-   'action action
-   'my-files-agent-shell-path path
-   'follow-link t
-   'help-echo (or help path)
-   'face (if selected 'my-files-agent-shell-selected 'default))
+  (let ((start (point)))
+    (insert-text-button
+     (concat (if selected "● " "  ") label)
+     'action action
+     'my-files-agent-shell-path path
+     'my-files-agent-shell-selected selected
+     'follow-link t
+     'help-echo (or help path)
+     'face (if selected 'my-files-agent-shell-selected 'default))
+    (when selected
+      (setq my-files-agent-shell--selected-path-button
+            (button-at start))))
   (insert "\n"))
 
 (defun my-files-agent-shell--select-area (button)
@@ -819,14 +909,10 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   "Insert a button that opens agent-shell BUFFER."
   (let* ((title (my-files-agent-shell--chat-title buffer))
          (status-label (concat "[" (my-files-agent-shell--chat-status buffer)
-                               "]"))
-         (title-width (max 8 (- my-files-agent-shell-chat-width
-                                (string-width status-label) 12)))
-         (display-title
-          (truncate-string-to-width title title-width nil nil "…")))
+                               "]")))
     (insert " ")
     (insert-text-button
-     (format "%s %s" status-label display-title)
+     (format "%s %s" status-label title)
      'action #'my-files-agent-shell--open-chat
      'my-files-agent-shell-buffer buffer
      'my-files-agent-shell-action 'open
@@ -882,14 +968,10 @@ in the Completed section.  Active chats must finish or be interrupted first."
          (status (my-files-agent-shell--codex-thread-status thread))
          (status-label (if (string= status "active")
                            "[codex:active]"
-                         "[codex]"))
-         (title-width (max 8 (- my-files-agent-shell-chat-width
-                                (string-width status-label) 12)))
-         (display-title
-          (truncate-string-to-width title title-width nil nil "…")))
+                         "[codex]")))
     (insert " ")
     (insert-text-button
-     (format "%s %s" status-label display-title)
+     (format "%s %s" status-label title)
      'action #'my-files-agent-shell--open-codex-chat
      'my-files-agent-shell-codex-entry thread
      'my-files-agent-shell-action 'open
@@ -949,10 +1031,25 @@ in the Completed section.  Active chats must finish or be interrupted first."
 
 (defun my-files-agent-shell--archive-codex-chat (button)
   "Archive the Codex task represented by BUTTON."
-  (let* ((thread (button-get button 'my-files-agent-shell-codex-thread))
+  (let* ((thread (or (button-get button 'my-files-agent-shell-codex-thread)
+                     (button-get button 'my-files-agent-shell-codex-entry)))
          (title (my-files-agent-shell--codex-thread-title thread)))
     (when (yes-or-no-p (format "Archive Codex task %s? " title))
       (my-files-agent-shell--request-codex-archive thread))))
+
+(defun my-files-agent-shell-archive-at-point ()
+  "Archive the highlighted staged Agent Shell chat or Codex task."
+  (interactive)
+  (let ((button (button-at (point))))
+    (cond
+     ((and button (button-get button 'my-files-agent-shell-buffer))
+      (my-files-agent-shell--archive-chat button))
+     ((and button (button-get button 'my-files-agent-shell-codex-entry))
+      (my-files-agent-shell--archive-codex-chat button))
+     ((and button (button-get button 'my-files-agent-shell-entry))
+      (user-error "That conversation is already under Completed"))
+     (t
+      (user-error "Highlight a staged Agent Shell chat or Codex task first")))))
 
 (defun my-files-agent-shell--agent-config (agent-name)
   "Return the installed agent-shell config matching AGENT-NAME."
@@ -1079,6 +1176,7 @@ in the Completed section.  Active chats must finish or be interrupted first."
     (let ((selection-key (my-files-agent-shell--selected-button-key))
           (inhibit-read-only t))
       (erase-buffer)
+      (setq my-files-agent-shell--selected-path-button nil)
       (my-files-agent-shell--insert-heading "AREAS")
       (if areas
           (dolist (area areas)
@@ -1099,6 +1197,7 @@ in the Completed section.  Active chats must finish or be interrupted first."
     (let ((selection-key (my-files-agent-shell--selected-button-key))
           (inhibit-read-only t))
       (erase-buffer)
+      (setq my-files-agent-shell--selected-path-button nil)
       (my-files-agent-shell--insert-heading "PROJECTS")
       (if my-files-agent-shell--selected-area
           (progn
@@ -1168,7 +1267,8 @@ in the Completed section.  Active chats must finish or be interrupted first."
       (setq my-files-agent-shell--collapsed-chat-sections
             (delq category my-files-agent-shell--collapsed-chat-sections)))
     (my-files-agent-shell--set-chat-section-button-state button collapsed)
-    (goto-char (button-start button))))
+    (goto-char (button-start button))
+    (my-files-agent-shell--resize-panels-to-content)))
 
 (defun my-files-agent-shell--insert-chat-section
     (category title count insert-items)
@@ -1236,7 +1336,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                    'face 'font-lock-keyword-face)
                   (insert "\n"))))
             (my-files-agent-shell--insert-empty
-             "Archive closes staged agent-shell chats or Codex tasks")
+             "Archive: highlight a staged or Codex chat and press a")
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
@@ -1340,6 +1440,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
         (my-files-agent-shell--render-projects projects)
         (my-files-agent-shell--render-chat-lists
          chats saved-chats codex-threads)
+        (my-files-agent-shell--update-panel-focus-faces)
+        (my-files-agent-shell--resize-panels-to-content)
         (my-files-agent-shell--refresh-codex-threads
          force-codex-refresh)))))
 
@@ -1381,12 +1483,68 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
            (when (my-files-agent-shell--visible-p)
              (my-files-agent-shell--refresh-codex-threads t))))))
 
-(defun my-files-agent-shell--scaled-panel-widths (total-width)
-  "Return three panel widths suitable for TOTAL-WIDTH."
-  (let* ((requested (list my-files-agent-shell-area-width
-                          my-files-agent-shell-project-width
-                          my-files-agent-shell-chat-width))
-         (available (- total-width my-files-agent-shell-minimum-main-width))
+(defun my-files-agent-shell--visible-line-width ()
+  "Return the display width of visible text on the current line."
+  (let ((position (line-beginning-position))
+        (end (line-end-position))
+        (width 0))
+    (while (< position end)
+      (let ((next (next-char-property-change position end)))
+        (unless (invisible-p position)
+          (setq width
+                (+ width
+                   (string-width
+                    (buffer-substring-no-properties position next)))))
+        (setq position next)))
+    width))
+
+(defun my-files-agent-shell--panel-content-width (buffer)
+  "Return the widest visible line in panel BUFFER."
+  (if (not (buffer-live-p buffer))
+      0
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (let ((width 0))
+            (while (not (eobp))
+              (setq width (max width
+                               (my-files-agent-shell--visible-line-width)))
+              (forward-line 1))
+            width))))))
+
+(defun my-files-agent-shell--desired-panel-widths ()
+  "Return preferred panel widths based on their visible text."
+  (cl-mapcar
+   (lambda (minimum name)
+     (max minimum
+          (1+ (my-files-agent-shell--panel-content-width
+               (get-buffer name)))))
+   (list my-files-agent-shell-area-width
+         my-files-agent-shell-project-width
+         my-files-agent-shell-chat-width)
+   (list my-files-agent-shell--area-buffer-name
+         my-files-agent-shell--project-buffer-name
+         my-files-agent-shell--chat-buffer-name)))
+
+(defun my-files-agent-shell--scaled-panel-widths
+    (total-width &optional requested-widths)
+  "Return three panel widths suitable for TOTAL-WIDTH.
+
+REQUESTED-WIDTHS defaults to the three configured preferred widths.  The
+combined result never exceeds half of TOTAL-WIDTH."
+  (let* ((requested
+          (mapcar
+           (lambda (width)
+             (max my-files-agent-shell-minimum-panel-width width))
+           (or requested-widths
+               (list my-files-agent-shell-area-width
+                     my-files-agent-shell-project-width
+                     my-files-agent-shell-chat-width))))
+         (available
+          (min (floor total-width 2)
+               (- total-width my-files-agent-shell-minimum-main-width)))
          (minimum-total (* 3 my-files-agent-shell-minimum-panel-width))
          (requested-total (apply #'+ requested)))
     (when (< available minimum-total)
@@ -1413,6 +1571,28 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
               (+ (nth 2 widths) (- available (apply #'+ widths))))
         widths))))
 
+(defun my-files-agent-shell--resize-panels-to-content ()
+  "Resize live browser panels to fit text within half the workspace."
+  (when (my-files-agent-shell--visible-p)
+    (let* ((windows (list my-files-agent-shell--area-window
+                          my-files-agent-shell--project-window
+                          my-files-agent-shell--chat-window
+                          my-files-agent-shell--main-window))
+           (total-width (apply #'+ (mapcar #'window-total-width windows)))
+           (widths
+            (my-files-agent-shell--scaled-panel-widths
+             total-width (my-files-agent-shell--desired-panel-widths)))
+           (ignore-window-parameters t))
+      ;; The panel windows are nested from left to right.  Resizing in that
+      ;; order preserves earlier widths and takes any adjustment from main.
+      (cl-mapc
+       (lambda (window width)
+         (let ((delta (- width (window-total-width window))))
+           (unless (zerop delta)
+             (window-resize window delta t))))
+       (butlast windows)
+       widths))))
+
 (defun my-files-agent-shell--prepare-panel-window (window buffer)
   "Display BUFFER in dedicated panel WINDOW."
   (set-window-buffer window buffer)
@@ -1425,7 +1605,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
   "Open the Areas, Projects, Chats, and main chat workspace."
   (interactive)
   (if (my-files-agent-shell--visible-p)
-      (select-window my-files-agent-shell--area-window)
+      (my-files-agent-shell--focus-window my-files-agent-shell--area-window)
     (when my-files-agent-shell--saved-window-configuration
       (my-files-agent-shell-close))
     (let* ((main (selected-window))
@@ -1463,12 +1643,16 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
               #'my-files-agent-shell-chat-mode))
             (add-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--buffer-list-updated)
+            (add-hook 'window-selection-change-functions
+                      #'my-files-agent-shell--update-panel-focus-faces)
             (my-files-agent-shell-refresh)
             (my-files-agent-shell--start-codex-refresh-timer)
             (my-files-agent-shell-focus-areas))
         (error
          (remove-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--buffer-list-updated)
+         (remove-hook 'window-selection-change-functions
+                      #'my-files-agent-shell--update-panel-focus-faces)
          (set-window-configuration configuration)
          (setq my-files-agent-shell--saved-window-configuration nil
                my-files-agent-shell--area-window nil
@@ -1483,6 +1667,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
   (interactive)
   (remove-hook 'buffer-list-update-hook
                #'my-files-agent-shell--buffer-list-updated)
+  (remove-hook 'window-selection-change-functions
+               #'my-files-agent-shell--update-panel-focus-faces)
   (when (timerp my-files-agent-shell--refresh-timer)
     (cancel-timer my-files-agent-shell--refresh-timer))
   (when (timerp my-files-agent-shell--codex-refresh-timer)
