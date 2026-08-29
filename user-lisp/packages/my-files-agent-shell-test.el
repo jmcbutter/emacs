@@ -2,6 +2,15 @@
 
 ;;; Code:
 
+(eval-and-compile
+  (add-to-list
+   'load-path
+   (file-name-directory
+    (or load-file-name
+        (and (boundp 'byte-compile-current-file)
+             byte-compile-current-file)
+        buffer-file-name))))
+
 (require 'ert)
 (require 'my-files-agent-shell)
 
