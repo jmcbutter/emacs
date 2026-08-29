@@ -515,5 +515,220 @@
           (my-files-agent-shell-close))
         (set-window-configuration configuration)))))
 
+(ert-deftest my-files-agent-shell-reads-only-saved-chat-metadata ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((project (expand-file-name "Work/Project" root))
+           (file (expand-file-name ".agent-shell/transcripts/large.md" project))
+           (original-insert-file-contents
+            (symbol-function 'insert-file-contents))
+           reads)
+      (make-directory (file-name-directory file) t)
+      (write-region
+       (concat "# Agent Shell Transcript\n\n"
+               "**Agent:** Codex\n"
+               "**Session ID:** large-session\n\n---\n\n"
+               "## User\n\nKeep this title cheap to discover.\n\n"
+               (make-string (* 2 1024 1024) ?x))
+       nil file nil 'silent)
+      (cl-letf (((symbol-function 'insert-file-contents)
+                 (lambda (filename &optional visit beg end replace)
+                   (push (list beg end) reads)
+                   (funcall original-insert-file-contents
+                            filename visit beg end replace))))
+        (let ((entry (my-files-agent-shell--read-transcript file project)))
+          (should (equal (plist-get entry :session-id) "large-session"))
+          (should (equal (plist-get entry :title)
+                         "Keep this title cheap to discover."))))
+      (should reads)
+      (dolist (read reads)
+        (should (numberp (cadr read)))
+        (should (<= (- (cadr read) (or (car read) 0)) (* 64 1024)))))))
+
+(ert-deftest my-files-agent-shell-lists-codex-metadata-without-scanning-rollouts ()
+  (let (request)
+    (cl-letf (((symbol-function 'codex-ide--request-async)
+               (lambda (session method params _callback)
+                 (setq request (list session method params)))))
+      (my-files-agent-shell--codex-list-page 'query-session nil nil))
+    (should (equal (nth 0 request) 'query-session))
+    (should (equal (nth 1 request) "thread/list"))
+    (should (eq (alist-get 'useStateDbOnly (nth 2 request)) t))))
+
+(ert-deftest my-files-agent-shell-opens-codex-task-in-agent-shell-with-history ()
+  (let* ((project (make-temp-file "agent-shell-codex-project-" t))
+         (thread `((id . "codex-session-id")
+                   (cwd . ,project)
+                   (name . "Resume in Agent Shell")))
+         (my-files-agent-shell--selected-project project)
+         (my-files-agent-shell--main-window (selected-window))
+         resumed-id
+         resumed-directory
+         restore-verbosity)
+    (unwind-protect
+        (with-temp-buffer
+          (insert-text-button
+           "Open"
+           'my-files-agent-shell-codex-entry thread)
+          (let ((button (button-at (point-min))))
+            (cl-letf (((symbol-function 'my-files-agent-shell--agent-config)
+                       #'ignore)
+                      ((symbol-function 'agent-shell-resume-session)
+                       (lambda (session-id)
+                         (setq resumed-id session-id
+                               resumed-directory default-directory
+                               restore-verbosity
+                               agent-shell-session-restore-verbosity))))
+              (my-files-agent-shell--open-codex-chat button))))
+      (delete-directory project t))
+    (should (equal resumed-id "codex-session-id"))
+    (should (equal (my-files-agent-shell--canonical-directory
+                    resumed-directory)
+                   (my-files-agent-shell--canonical-directory project)))
+    (should (eq restore-verbosity 'first-last))))
+
+(ert-deftest my-files-agent-shell-filters-chats-by-selected-area ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((area (expand-file-name "Work" root))
+           (project (expand-file-name "Project" area))
+           (other-area (expand-file-name "Personal" root))
+           (area-buffer (generate-new-buffer " area-chat"))
+           (project-buffer (generate-new-buffer " project-chat"))
+           (other-buffer (generate-new-buffer " other-area-chat")))
+      (make-directory project t)
+      (make-directory other-area t)
+      (unwind-protect
+          (progn
+            (with-current-buffer area-buffer
+              (setq default-directory (file-name-as-directory area)))
+            (with-current-buffer project-buffer
+              (setq default-directory (file-name-as-directory project)))
+            (with-current-buffer other-buffer
+              (setq default-directory (file-name-as-directory other-area)))
+            (should
+             (equal
+              (my-files-agent-shell--area-chat-buffers
+               area (list other-buffer project-buffer area-buffer))
+              (list project-buffer area-buffer))))
+        (mapc #'kill-buffer
+              (list area-buffer project-buffer other-buffer))))))
+
+(ert-deftest my-files-agent-shell-keeps-area-wide-scope-without-a-project ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((area (expand-file-name "Work" root))
+           (project (expand-file-name "Project" area))
+           (my-files-agent-shell--selected-area
+            (file-name-as-directory area))
+           (my-files-agent-shell--selected-project nil)
+           (my-files-agent-shell--codex-threads nil))
+      (make-directory project t)
+      (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
+      (write-region "" nil (expand-file-name ".project.toml" project)
+                    nil 'silent)
+      (cl-letf (((symbol-function 'agent-shell-buffers) #'ignore)
+                ((symbol-function
+                  'my-files-agent-shell--refresh-codex-threads)
+                 #'ignore))
+        (my-files-agent-shell-refresh))
+      (should-not my-files-agent-shell--selected-project)
+      (with-current-buffer my-files-agent-shell--project-buffer-name
+        (should (string-match-p "All area chats" (buffer-string))))
+      (with-current-buffer my-files-agent-shell--chat-buffer-name
+        (should-not (string-match-p "Select a project" (buffer-string)))))))
+
+(ert-deftest my-files-agent-shell-navigation-moves-between-rows ()
+  (let ((first (generate-new-buffer "first chat"))
+        (second (generate-new-buffer "second chat"))
+        (my-files-agent-shell--selected-project default-directory))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'my-files-agent-shell--chat-status-symbol)
+                   (lambda (_buffer) 'ready))
+                  ((symbol-function 'my-files-agent-shell--chat-title)
+                   #'buffer-name)
+                  ((symbol-function 'my-files-agent-shell--subscribe-chat)
+                   #'ignore))
+          (my-files-agent-shell--render-chat-lists (list first second) nil)
+          (with-current-buffer my-files-agent-shell--chat-buffer-name
+            (let ((first-row
+                   (my-files-agent-shell-test--button-with-property
+                    'my-files-agent-shell-action 'open)))
+              (goto-char (button-start first-row))
+              (my-files-agent-shell-next-item)
+              (let ((next-row (button-at (point))))
+                (should (eq (button-get next-row 'my-files-agent-shell-action)
+                            'open))
+                (should (equal (button-label next-row)
+                               "[ready] second chat"))))))
+      (mapc #'kill-buffer (list first second)))))
+
+(ert-deftest my-files-agent-shell-caches-saved-chat-metadata ()
+  (my-files-agent-shell-test--with-tree
+      ((my-files-agent-shell--transcript-metadata-cache
+        (make-hash-table :test #'equal)))
+    (let* ((project (expand-file-name "Work/Project" root))
+           (file (expand-file-name ".agent-shell/transcripts/saved.md" project))
+           (original-insert-file-contents
+            (symbol-function 'insert-file-contents))
+           (read-count 0))
+      (make-directory (file-name-directory file) t)
+      (write-region
+       (concat "# Agent Shell Transcript\n\n"
+               "**Agent:** Codex\n"
+               "**Session ID:** cached-session\n\n---\n\n"
+               "## User\n\nCache this title.\n")
+       nil file nil 'silent)
+      (cl-letf (((symbol-function 'insert-file-contents)
+                 (lambda (&rest arguments)
+                   (cl-incf read-count)
+                   (apply original-insert-file-contents arguments))))
+        (should (my-files-agent-shell--read-transcript file project))
+        (should (my-files-agent-shell--read-transcript file project)))
+      (should (= read-count 1)))))
+
+(ert-deftest my-files-agent-shell-render-preserves-selected-chat-row ()
+  (let ((first (generate-new-buffer "first preserved chat"))
+        (second (generate-new-buffer "second preserved chat"))
+        (my-files-agent-shell--selected-project default-directory))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'my-files-agent-shell--chat-status-symbol)
+                   (lambda (_buffer) 'ready))
+                  ((symbol-function 'my-files-agent-shell--chat-title)
+                   #'buffer-name)
+                  ((symbol-function 'my-files-agent-shell--subscribe-chat)
+                   #'ignore))
+          (my-files-agent-shell--render-chat-lists (list first second) nil)
+          (with-current-buffer my-files-agent-shell--chat-buffer-name
+            (goto-char
+             (button-start
+              (my-files-agent-shell-test--button-with-property
+               'my-files-agent-shell-buffer second))))
+          (my-files-agent-shell--render-chat-lists (list first second) nil)
+          (with-current-buffer my-files-agent-shell--chat-buffer-name
+            (let ((button (button-at (point))))
+              (should (eq (button-get button 'my-files-agent-shell-buffer)
+                          second)))))
+      (mapc #'kill-buffer (list first second)))))
+
+(ert-deftest my-files-agent-shell-ignores-unrelated-buffer-list-updates ()
+  (let ((chat (generate-new-buffer "known agent chat"))
+        (other (generate-new-buffer "unrelated buffer"))
+        (my-files-agent-shell--known-chat-buffers nil)
+        (refresh-count 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-buffers)
+                   (lambda () (list chat)))
+                  ((symbol-function 'my-files-agent-shell--schedule-refresh)
+                   (lambda (&rest _arguments)
+                     (cl-incf refresh-count))))
+          (setq my-files-agent-shell--known-chat-buffers (list chat))
+          (my-files-agent-shell--buffer-list-updated)
+          (should (= refresh-count 0))
+          (cl-letf (((symbol-function 'agent-shell-buffers)
+                     (lambda () (list other chat))))
+            (my-files-agent-shell--buffer-list-updated))
+          (should (= refresh-count 1)))
+      (mapc #'kill-buffer (list chat other)))))
+
 (provide 'my-files-agent-shell-test)
 ;;; my-files-agent-shell-test.el ends here

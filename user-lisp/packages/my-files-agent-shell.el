@@ -17,9 +17,10 @@
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel combines live `agent-shell'
 ;; buffers, their saved transcripts, and non-archived Codex tasks whose
-;; working directories belong to the selected project.  Busy chats and active
-;; Codex tasks are In Progress, idle or stored chats are Staged, and closed
-;; resumable agent-shell transcripts are Completed.
+;; working directories belong to the selected project or area.  Codex tasks
+;; resume in Agent Shell; saved metadata remains lazy until a row is opened.
+;; Busy chats and active Codex tasks are In Progress, idle or stored chats are
+;; Staged, and closed resumable agent-shell transcripts are Completed.
 
 ;;; Code:
 
@@ -94,6 +95,17 @@ discovery quick."
   :type 'number
   :group 'my-files-agent-shell)
 
+(defcustom my-files-agent-shell-session-restore-verbosity 'first-last
+  "How much prior chat history Agent Shell should render when resuming.
+
+The agent resumes the complete session context regardless of this display
+setting.  `first-last' keeps large histories responsive while showing enough
+of the conversation to confirm that the correct session was restored."
+  :type '(choice (const :tag "Last turn" last)
+                 (const :tag "First and last turns" first-last)
+                 (const :tag "Full visible history" full))
+  :group 'my-files-agent-shell)
+
 (defface my-files-agent-shell-heading
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face used for panel headings."
@@ -128,6 +140,9 @@ discovery quick."
 (defvar my-files-agent-shell--codex-threads nil)
 (defvar my-files-agent-shell--codex-error nil)
 (defvar my-files-agent-shell--codex-last-refresh-time nil)
+(defvar my-files-agent-shell--known-chat-buffers nil)
+(defvar my-files-agent-shell--transcript-metadata-cache
+  (make-hash-table :test #'equal))
 (defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 (defvar-local my-files-agent-shell--assigned-project nil)
@@ -163,6 +178,7 @@ discovery quick."
 (declare-function codex-ide-session-process "codex-ide-core")
 (declare-function codex-ide-session-status "codex-ide-core")
 (defvar agent-shell--state)
+(defvar agent-shell-session-restore-verbosity)
 (defvar codex-ide-cli-path)
 
 (defvar-keymap my-files-agent-shell-mode-map
@@ -212,10 +228,50 @@ discovery quick."
   (let ((button (next-button (point-min)))
         buttons)
     (while button
-      (unless (invisible-p (button-start button))
+      (unless (or (invisible-p (button-start button))
+                  (button-get button 'my-files-agent-shell-secondary-action))
         (push button buttons))
       (setq button (next-button (button-end button))))
     (nreverse buttons)))
+
+(defun my-files-agent-shell--button-selection-key (button)
+  "Return a stable selection key for primary BUTTON, or nil."
+  (cond
+   ((button-get button 'my-files-agent-shell-path)
+    (list 'path (button-get button 'my-files-agent-shell-path)))
+   ((button-get button 'my-files-agent-shell-buffer)
+    (list 'buffer (button-get button 'my-files-agent-shell-buffer)))
+   ((button-get button 'my-files-agent-shell-entry)
+    (list 'saved
+          (plist-get (button-get button 'my-files-agent-shell-entry)
+                     :session-id)))
+   ((button-get button 'my-files-agent-shell-codex-entry)
+    (list 'codex
+          (alist-get 'id
+                     (button-get button 'my-files-agent-shell-codex-entry))))
+   ((button-get button 'my-files-agent-shell-category)
+    (list 'category
+          (button-get button 'my-files-agent-shell-category)))
+   ((button-get button 'action)
+    (list 'action (button-get button 'action)))))
+
+(defun my-files-agent-shell--selected-button-key ()
+  "Return the current primary button's stable selection key, or nil."
+  (when-let* ((button (button-at (point))))
+    (my-files-agent-shell--button-selection-key button)))
+
+(defun my-files-agent-shell--restore-button-selection (key)
+  "Restore point to the visible primary button matching KEY."
+  (goto-char (point-min))
+  (when key
+    (when-let* ((button
+                 (seq-find
+                  (lambda (candidate)
+                    (equal (my-files-agent-shell--button-selection-key
+                            candidate)
+                           key))
+                  (my-files-agent-shell--visible-buttons))))
+      (goto-char (button-start button)))))
 
 (defun my-files-agent-shell--move-item (direction)
   "Move to the next visible item in DIRECTION, wrapping at the ends."
@@ -311,6 +367,16 @@ discovery quick."
   "Return DIRECTORY as a canonical directory name."
   (file-name-as-directory (file-truename (expand-file-name directory))))
 
+(defun my-files-agent-shell--directory-in-scope-p (directory scope)
+  "Return non-nil when DIRECTORY is SCOPE or is contained by it."
+  (condition-case nil
+      (let ((directory-root
+             (my-files-agent-shell--canonical-directory directory))
+            (scope-root (my-files-agent-shell--canonical-directory scope)))
+        (or (equal directory-root scope-root)
+            (file-in-directory-p directory-root scope-root)))
+    (file-error nil)))
+
 (defun my-files-agent-shell-agent-data-directory (subdir)
   "Return the centralized agent-shell directory for SUBDIR.
 
@@ -378,45 +444,51 @@ Otherwise retain agent-shell's normal behavior and store data below its CWD."
              (file-relative-name left area)
              (file-relative-name right area))))))
 
+(defun my-files-agent-shell--scope-chat-buffers (scope &optional buffers)
+  "Return live agent-shell BUFFERS whose directories belong to SCOPE.
+
+When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
+  (when scope
+    (seq-filter
+     (lambda (buffer)
+       (when (buffer-live-p buffer)
+         (let ((assigned-project
+                (buffer-local-value
+                 'my-files-agent-shell--assigned-project buffer))
+               (directory (buffer-local-value 'default-directory buffer)))
+           (when-let* ((chat-directory (or assigned-project directory)))
+             (my-files-agent-shell--directory-in-scope-p
+              chat-directory scope)))))
+     (or buffers (agent-shell-buffers)))))
+
 (defun my-files-agent-shell--project-chat-buffers (project &optional buffers)
   "Return live agent-shell BUFFERS whose directories belong to PROJECT.
 
 When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
-  (when project
-    (let ((project-root (my-files-agent-shell--canonical-directory project)))
-      (seq-filter
-       (lambda (buffer)
-         (when (buffer-live-p buffer)
-           (let ((assigned-project
-                  (buffer-local-value
-                   'my-files-agent-shell--assigned-project buffer))
-                 (directory (buffer-local-value 'default-directory buffer)))
-             (if assigned-project
-                 (equal assigned-project project-root)
-               (and directory
-                    (condition-case nil
-                        (let ((chat-root
-                               (my-files-agent-shell--canonical-directory
-                                directory)))
-                          (or (equal chat-root project-root)
-                              (file-in-directory-p chat-root project-root)))
-                      (file-error nil)))))))
-       (or buffers (agent-shell-buffers))))))
+  (my-files-agent-shell--scope-chat-buffers project buffers))
+
+(defun my-files-agent-shell--area-chat-buffers (area &optional buffers)
+  "Return live agent-shell BUFFERS whose directories belong to AREA.
+
+When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
+  (my-files-agent-shell--scope-chat-buffers area buffers))
+
+(defun my-files-agent-shell--scope-codex-threads (scope threads)
+  "Return Codex THREADS whose working directories belong to SCOPE."
+  (when scope
+    (seq-filter
+     (lambda (thread)
+       (when-let* ((directory (alist-get 'cwd thread)))
+         (my-files-agent-shell--directory-in-scope-p directory scope)))
+     threads)))
 
 (defun my-files-agent-shell--project-codex-threads (project threads)
   "Return Codex THREADS whose working directories belong to PROJECT."
-  (when project
-    (let ((project-root (my-files-agent-shell--canonical-directory project)))
-      (seq-filter
-       (lambda (thread)
-         (when-let* ((directory (alist-get 'cwd thread)))
-           (condition-case nil
-               (let ((thread-root
-                      (my-files-agent-shell--canonical-directory directory)))
-                 (or (equal thread-root project-root)
-                     (file-in-directory-p thread-root project-root)))
-             (file-error nil))))
-       threads))))
+  (my-files-agent-shell--scope-codex-threads project threads))
+
+(defun my-files-agent-shell--area-codex-threads (area threads)
+  "Return Codex THREADS whose working directories belong to AREA."
+  (my-files-agent-shell--scope-codex-threads area threads))
 
 (defun my-files-agent-shell--codex-thread-status (thread)
   "Return THREAD's Codex status as a string."
@@ -470,6 +542,7 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
    "thread/list"
    (delq nil
          `((archived . :json-false)
+           (useStateDbOnly . t)
            (limit . 100)
            (sortKey . "updated_at")
            (sortDirection . "desc")
@@ -586,22 +659,34 @@ When FORCE is non-nil, ignore the normal refresh interval."
 
 (defun my-files-agent-shell--read-transcript (file project)
   "Return saved chat metadata parsed from transcript FILE in PROJECT."
-  (with-temp-buffer
-    ;; Session metadata and the first prompt are near the start.  Bounding the
-    ;; read keeps a long tool-heavy transcript from delaying panel refreshes.
-    (insert-file-contents file nil 0 65536)
-    (when-let* ((session-id
-                 (my-files-agent-shell--transcript-field "Session ID")))
-      (list :session-id session-id
-            :agent (my-files-agent-shell--transcript-field "Agent")
-            :started (my-files-agent-shell--transcript-field "Started")
-            :title (or (my-files-agent-shell--transcript-title)
-                       (file-name-base file))
-            :transcript file
-            :project project
-            :modified
-            (float-time
-             (file-attribute-modification-time (file-attributes file)))))))
+  (let* ((attributes (file-attributes file))
+         (modified (file-attribute-modification-time attributes))
+         (stamp (list modified (file-attribute-size attributes)))
+         (cached (gethash file
+                          my-files-agent-shell--transcript-metadata-cache)))
+    (if (equal stamp (car-safe cached))
+        (cdr cached)
+      (let ((entry
+             (with-temp-buffer
+               ;; Session metadata and the first prompt are near the start.
+               ;; Bounding and caching this read keeps long, tool-heavy
+               ;; transcripts out of routine panel refreshes.
+               (insert-file-contents file nil 0 65536)
+               (when-let* ((session-id
+                            (my-files-agent-shell--transcript-field
+                             "Session ID")))
+                 (list :session-id session-id
+                       :agent (my-files-agent-shell--transcript-field "Agent")
+                       :started (my-files-agent-shell--transcript-field
+                                 "Started")
+                       :title (or (my-files-agent-shell--transcript-title)
+                                  (file-name-base file))
+                       :transcript file
+                       :project project
+                       :modified (float-time modified))))))
+        (puthash file (cons stamp entry)
+                 my-files-agent-shell--transcript-metadata-cache)
+        entry))))
 
 (defun my-files-agent-shell--discover-saved-chats (project live-session-ids)
   "Return saved PROJECT chats, excluding LIVE-SESSION-IDS and duplicates."
@@ -628,6 +713,28 @@ When FORCE is non-nil, ignore the normal refresh interval."
              (puthash session-id t seen)
              t)))
        entries))))
+
+(defun my-files-agent-shell--discover-saved-chats-in-directories
+    (directories live-session-ids)
+  "Return unique saved chats below DIRECTORIES, excluding LIVE-SESSION-IDS."
+  (let ((entries
+         (apply #'append
+                (mapcar
+                 (lambda (directory)
+                   (my-files-agent-shell--discover-saved-chats
+                    directory live-session-ids))
+                 directories)))
+        (seen (make-hash-table :test #'equal)))
+    (seq-filter
+     (lambda (entry)
+       (let ((session-id (plist-get entry :session-id)))
+         (unless (gethash session-id seen)
+           (puthash session-id t seen)
+           t)))
+     (sort entries
+           (lambda (left right)
+             (> (plist-get left :modified)
+                (plist-get right :modified)))))))
 
 (defun my-files-agent-shell--visible-p ()
   "Return non-nil when all browser panel windows are live."
@@ -732,6 +839,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'action #'my-files-agent-shell--archive-chat
      'my-files-agent-shell-buffer buffer
      'my-files-agent-shell-action 'archive
+     'my-files-agent-shell-secondary-action t
      'follow-link t
      'help-echo "Close this staged chat and keep its saved transcript"
      'face 'my-files-agent-shell-muted)
@@ -786,7 +894,7 @@ in the Completed section.  Active chats must finish or be interrupted first."
      'my-files-agent-shell-codex-entry thread
      'my-files-agent-shell-action 'open
      'follow-link t
-     'help-echo "Open this task in Codex"
+     'help-echo "Resume this Codex task in Agent Shell"
      'face 'default)
     (insert "  ")
     (insert-text-button
@@ -794,18 +902,23 @@ in the Completed section.  Active chats must finish or be interrupted first."
      'action #'my-files-agent-shell--archive-codex-chat
      'my-files-agent-shell-codex-thread thread
      'my-files-agent-shell-action 'archive
+     'my-files-agent-shell-secondary-action t
      'follow-link t
      'help-echo "Archive this Codex task"
      'face 'my-files-agent-shell-muted)
     (insert "\n")))
 
 (defun my-files-agent-shell--open-codex-chat (button)
-  "Open the Codex task represented by BUTTON in the desktop app."
+  "Resume the Codex task represented by BUTTON in Agent Shell."
   (let* ((thread (button-get button 'my-files-agent-shell-codex-entry))
-         (thread-id (alist-get 'id thread)))
+         (thread-id (alist-get 'id thread))
+         (directory (or (alist-get 'cwd thread)
+                        my-files-agent-shell--selected-project
+                        my-files-agent-shell--selected-area)))
     (unless thread-id
       (user-error "That Codex task has no thread id"))
-    (browse-url (format "codex://threads/%s" thread-id))))
+    (my-files-agent-shell--start-resumed-chat
+     thread-id "Codex" directory)))
 
 (defun my-files-agent-shell--request-codex-archive (thread)
   "Archive Codex THREAD and remove it from the pane after success."
@@ -860,28 +973,45 @@ in the Completed section.  Active chats must finish or be interrupted first."
      (concat "agent-shell requires shell-maker 0.97.2 or newer; "
              "upgrade shell-maker and restart Emacs"))))
 
-(defun my-files-agent-shell--resume-chat (button)
-  "Resume the saved agent-shell session represented by BUTTON."
+(defun my-files-agent-shell--start-resumed-chat
+    (session-id agent-name directory)
+  "Resume SESSION-ID for AGENT-NAME in DIRECTORY and show it in the main pane."
   (my-files-agent-shell--ensure-agent-shell-ready)
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
-  (let* ((entry (button-get button 'my-files-agent-shell-entry))
-         (session-id (plist-get entry :session-id))
-         (config (my-files-agent-shell--agent-config
-                  (plist-get entry :agent)))
-         (default-directory (plist-get entry :project))
+  (unless directory
+    (user-error "That chat has no working directory"))
+  (let* ((config (my-files-agent-shell--agent-config agent-name))
+         (resume-directory
+          (my-files-agent-shell--canonical-directory directory))
+         (agent-shell-session-restore-verbosity
+          my-files-agent-shell-session-restore-verbosity)
          (buffer
           (with-selected-window my-files-agent-shell--main-window
-            (if config
-                (agent-shell-start :config config :session-id session-id)
-              ;; Avoid silently resuming with a preferred agent that differs
-              ;; from the transcript.  Let agent-shell ask when no match exists.
-              (let ((agent-shell-preferred-agent-config nil))
-                (agent-shell-resume-session session-id))))))
+            (let ((default-directory resume-directory))
+              (if config
+                  (agent-shell-start :config config :session-id session-id)
+                (let ((agent-shell-preferred-agent-config nil))
+                  (agent-shell-resume-session session-id)))))))
+    ;; Agent startup completes asynchronously.  Keep the display policy
+    ;; buffer-local so session/load callbacks see it after this call returns.
     (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq-local agent-shell-session-restore-verbosity
+                    my-files-agent-shell-session-restore-verbosity))
       (set-window-buffer my-files-agent-shell--main-window buffer)
       (select-window my-files-agent-shell--main-window))
-    (my-files-agent-shell--schedule-refresh)))
+    (my-files-agent-shell--schedule-refresh)
+    buffer))
+
+(defun my-files-agent-shell--resume-chat (button)
+  "Resume the saved agent-shell session represented by BUTTON."
+  (let* ((entry (button-get button 'my-files-agent-shell-entry))
+         (session-id (plist-get entry :session-id))
+         (agent-name (plist-get entry :agent))
+         (directory (plist-get entry :project)))
+    (my-files-agent-shell--start-resumed-chat
+     session-id agent-name directory)))
 
 (defun my-files-agent-shell--new-chat (_button)
   "Start a new agent-shell chat for the selected project."
@@ -946,7 +1076,8 @@ in the Completed section.  Active chats must finish or be interrupted first."
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--area-buffer-name
        #'my-files-agent-shell-area-mode)
-    (let ((inhibit-read-only t))
+    (let ((selection-key (my-files-agent-shell--selected-button-key))
+          (inhibit-read-only t))
       (erase-buffer)
       (my-files-agent-shell--insert-heading "AREAS")
       (if areas
@@ -957,7 +1088,7 @@ in the Completed section.  Active chats must finish or be interrupted first."
              (equal area my-files-agent-shell--selected-area)
              #'my-files-agent-shell--select-area))
         (my-files-agent-shell--insert-empty "No areas found"))
-      (goto-char (point-min)))))
+      (my-files-agent-shell--restore-button-selection selection-key))))
 
 (defun my-files-agent-shell--render-projects (projects)
   "Render the project panel using PROJECTS."
@@ -965,23 +1096,31 @@ in the Completed section.  Active chats must finish or be interrupted first."
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--project-buffer-name
        #'my-files-agent-shell-project-mode)
-    (let ((inhibit-read-only t))
+    (let ((selection-key (my-files-agent-shell--selected-button-key))
+          (inhibit-read-only t))
       (erase-buffer)
       (my-files-agent-shell--insert-heading "PROJECTS")
-      (if projects
-          (dolist (project projects)
+      (if my-files-agent-shell--selected-area
+          (progn
             (my-files-agent-shell--insert-path-button
-             (directory-file-name
-              (file-relative-name project
-                                  my-files-agent-shell--selected-area))
-             project
-             (equal project my-files-agent-shell--selected-project)
-             #'my-files-agent-shell--select-project))
+             "All area chats"
+             my-files-agent-shell--selected-area
+             (null my-files-agent-shell--selected-project)
+             #'my-files-agent-shell--select-area
+             "Show chats from every project in this area")
+            (if projects
+                (dolist (project projects)
+                  (my-files-agent-shell--insert-path-button
+                   (directory-file-name
+                    (file-relative-name project
+                                        my-files-agent-shell--selected-area))
+                   project
+                   (equal project my-files-agent-shell--selected-project)
+                   #'my-files-agent-shell--select-project))
+              (my-files-agent-shell--insert-empty "No projects found")))
         (my-files-agent-shell--insert-empty
-         (if my-files-agent-shell--selected-area
-             "No projects found"
-           "Select an area")))
-      (goto-char (point-min)))))
+         "Select an area"))
+      (my-files-agent-shell--restore-button-selection selection-key))))
 
 (defun my-files-agent-shell--insert-saved-chat-button (entry)
   "Insert a button that resumes saved chat ENTRY."
@@ -1068,31 +1207,34 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--chat-buffer-name
        #'my-files-agent-shell-chat-mode)
-    (let ((inhibit-read-only t))
+    (let ((selection-key (my-files-agent-shell--selected-button-key))
+          (inhibit-read-only t))
       (erase-buffer)
       (my-files-agent-shell--insert-heading "AGENT CHATS")
-      (if my-files-agent-shell--selected-project
+      (if (or my-files-agent-shell--selected-project
+              my-files-agent-shell--selected-area)
           (progn
-            (insert " ")
-            (insert-text-button
-             "+ New chat"
-             'action #'my-files-agent-shell--new-chat
-             'follow-link t
-             'help-echo "Start a new agent-shell chat for this project"
-             'face 'font-lock-keyword-face)
-            (insert "\n")
-            (when-let* ((main-chat
-                         (my-files-agent-shell--main-agent-chat-buffer)))
-              (unless (memq main-chat chats)
-                (insert " ")
-                (insert-text-button
-                 "+ Assign current chat here"
-                 'action #'my-files-agent-shell--assign-main-chat-to-project
-                 'follow-link t
-                 'help-echo
-                 "Show the main window's live agent-shell chat in this project"
-                 'face 'font-lock-keyword-face)
-                (insert "\n")))
+            (when my-files-agent-shell--selected-project
+              (insert " ")
+              (insert-text-button
+               "+ New chat"
+               'action #'my-files-agent-shell--new-chat
+               'follow-link t
+               'help-echo "Start a new agent-shell chat for this project"
+               'face 'font-lock-keyword-face)
+              (insert "\n")
+              (when-let* ((main-chat
+                           (my-files-agent-shell--main-agent-chat-buffer)))
+                (unless (memq main-chat chats)
+                  (insert " ")
+                  (insert-text-button
+                   "+ Assign current chat here"
+                   'action #'my-files-agent-shell--assign-main-chat-to-project
+                   'follow-link t
+                   'help-echo
+                   "Show the main window's live agent-shell chat in this project"
+                   'face 'font-lock-keyword-face)
+                  (insert "\n"))))
             (my-files-agent-shell--insert-empty
              "Archive closes staged agent-shell chats or Codex tasks")
             (when my-files-agent-shell--codex-error
@@ -1144,8 +1286,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                       (dolist (entry saved-chats)
                         (my-files-agent-shell--insert-saved-chat-button
                          entry)))))))))
-        (my-files-agent-shell--insert-empty "Select a project"))
-      (goto-char (point-min)))))
+        (my-files-agent-shell--insert-empty "Select an area"))
+      (my-files-agent-shell--restore-button-selection selection-key))))
 
 ;;;###autoload
 (defun my-files-agent-shell-refresh ()
@@ -1171,27 +1313,48 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                   (lambda (project)
                     (equal project my-files-agent-shell--selected-project))
                   projects))))
-      (setq my-files-agent-shell--selected-project
-            (or selected-project (car projects)))
-      (let* ((chats
-              (my-files-agent-shell--project-chat-buffers
-               my-files-agent-shell--selected-project))
+      (setq my-files-agent-shell--selected-project selected-project)
+      (let* ((all-chat-buffers (agent-shell-buffers))
+             (scope (or my-files-agent-shell--selected-project
+                        my-files-agent-shell--selected-area))
+             (chats
+              (my-files-agent-shell--scope-chat-buffers
+               scope all-chat-buffers))
+             (saved-chat-directories
+              (if my-files-agent-shell--selected-project
+                  (list my-files-agent-shell--selected-project)
+                (and my-files-agent-shell--selected-area
+                     (cons my-files-agent-shell--selected-area projects))))
              (saved-chats
-              (and my-files-agent-shell--selected-project
-                   (my-files-agent-shell--discover-saved-chats
-                    my-files-agent-shell--selected-project
+              (and saved-chat-directories
+                   (my-files-agent-shell--discover-saved-chats-in-directories
+                    saved-chat-directories
                     (delq nil (mapcar #'my-files-agent-shell--live-session-id
                                       chats)))))
              (codex-threads
-              (my-files-agent-shell--project-codex-threads
-               my-files-agent-shell--selected-project
+              (my-files-agent-shell--scope-codex-threads
+               scope
                my-files-agent-shell--codex-threads)))
+        (setq my-files-agent-shell--known-chat-buffers all-chat-buffers)
         (my-files-agent-shell--render-areas areas)
         (my-files-agent-shell--render-projects projects)
         (my-files-agent-shell--render-chat-lists
          chats saved-chats codex-threads)
         (my-files-agent-shell--refresh-codex-threads
          force-codex-refresh)))))
+
+(defun my-files-agent-shell--same-buffer-set-p (left right)
+  "Return non-nil when LEFT and RIGHT contain the same buffer objects."
+  (and (= (length left) (length right))
+       (seq-every-p (lambda (buffer) (memq buffer right)) left)))
+
+(defun my-files-agent-shell--buffer-list-updated ()
+  "Refresh only when the set of Agent Shell buffers changed."
+  (let ((buffers (agent-shell-buffers)))
+    (unless (my-files-agent-shell--same-buffer-set-p
+             buffers my-files-agent-shell--known-chat-buffers)
+      (setq my-files-agent-shell--known-chat-buffers buffers)
+      (my-files-agent-shell--schedule-refresh))))
 
 (defun my-files-agent-shell--schedule-refresh (&rest _ignored)
   "Schedule a browser refresh after current buffer activity settles."
@@ -1299,13 +1462,13 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
               my-files-agent-shell--chat-buffer-name
               #'my-files-agent-shell-chat-mode))
             (add-hook 'buffer-list-update-hook
-                      #'my-files-agent-shell--schedule-refresh)
+                      #'my-files-agent-shell--buffer-list-updated)
             (my-files-agent-shell-refresh)
             (my-files-agent-shell--start-codex-refresh-timer)
             (my-files-agent-shell-focus-areas))
         (error
          (remove-hook 'buffer-list-update-hook
-                      #'my-files-agent-shell--schedule-refresh)
+                      #'my-files-agent-shell--buffer-list-updated)
          (set-window-configuration configuration)
          (setq my-files-agent-shell--saved-window-configuration nil
                my-files-agent-shell--area-window nil
@@ -1319,7 +1482,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
   "Close the browser and restore the previous window configuration."
   (interactive)
   (remove-hook 'buffer-list-update-hook
-               #'my-files-agent-shell--schedule-refresh)
+               #'my-files-agent-shell--buffer-list-updated)
   (when (timerp my-files-agent-shell--refresh-timer)
     (cancel-timer my-files-agent-shell--refresh-timer))
   (when (timerp my-files-agent-shell--codex-refresh-timer)
