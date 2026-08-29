@@ -22,6 +22,7 @@
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
+;; Hovering a conversation displays its complete title through Emacs help text.
 
 ;;; Code:
 
@@ -172,6 +173,8 @@ of the conversation to confirm that the correct session was restored."
 (defvar my-files-agent-shell--conversation-state-load-error nil)
 (defvar my-files-agent-shell--transcript-metadata-cache
   (make-hash-table :test #'equal))
+(defconst my-files-agent-shell--transcript-metadata-cache-version 2
+  "Schema version for cached transcript metadata entries.")
 (defvar-local my-files-agent-shell--subscribed-events nil)
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 (defvar-local my-files-agent-shell--assigned-project nil)
@@ -942,17 +945,16 @@ When FORCE is non-nil, ignore the normal refresh interval."
                   (looking-at-p "^[ \\t]*$"))
         (forward-line 1))
       (unless (eobp)
-        (truncate-string-to-width
-         (string-trim
-          (buffer-substring-no-properties
-           (line-beginning-position) (line-end-position)))
-         80 nil nil "…")))))
+        (string-trim
+         (buffer-substring-no-properties
+          (line-beginning-position) (line-end-position)))))))
 
 (defun my-files-agent-shell--read-transcript (file project)
   "Return saved chat metadata parsed from transcript FILE in PROJECT."
   (let* ((attributes (file-attributes file))
          (modified (file-attribute-modification-time attributes))
-         (stamp (list modified (file-attribute-size attributes)))
+         (stamp (list my-files-agent-shell--transcript-metadata-cache-version
+                      modified (file-attribute-size attributes)))
          (cached (gethash file
                           my-files-agent-shell--transcript-metadata-cache)))
     (if (equal stamp (car-safe cached))
@@ -966,15 +968,20 @@ When FORCE is non-nil, ignore the normal refresh interval."
                (when-let* ((session-id
                             (my-files-agent-shell--transcript-field
                              "Session ID")))
-                 (list :session-id session-id
-                       :agent (my-files-agent-shell--transcript-field "Agent")
-                       :started (my-files-agent-shell--transcript-field
-                                 "Started")
-                       :title (or (my-files-agent-shell--transcript-title)
-                                  (file-name-base file))
-                       :transcript file
-                       :project project
-                       :modified (float-time modified))))))
+                 (let ((title
+                        (or (my-files-agent-shell--transcript-title)
+                            (file-name-base file))))
+                   (list :session-id session-id
+                         :agent
+                         (my-files-agent-shell--transcript-field "Agent")
+                         :started
+                         (my-files-agent-shell--transcript-field "Started")
+                         :title
+                         (truncate-string-to-width title 80 nil nil "…")
+                         :full-title title
+                         :transcript file
+                         :project project
+                         :modified (float-time modified)))))))
         (puthash file (cons stamp entry)
                  my-files-agent-shell--transcript-metadata-cache)
         entry))))
@@ -1164,7 +1171,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
-     'help-echo (format "Open %s" (buffer-name buffer))
+     'help-echo (format "%s\nOpen this live conversation" title)
      'face 'default)
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
@@ -1197,7 +1204,7 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'my-files-agent-shell-action 'open
      'follow-link t
-     'help-echo "Resume this Codex task in Agent Shell"
+     'help-echo (format "%s\nResume this Codex task in Agent Shell" title)
      'face 'default)
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
@@ -1462,6 +1469,8 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   "Insert a button that resumes saved chat ENTRY."
   (let ((key (my-files-agent-shell--saved-conversation-key entry))
         (title (plist-get entry :title))
+        (full-title (or (plist-get entry :full-title)
+                        (plist-get entry :title)))
         (agent (or (plist-get entry :agent) "Agent"))
         (started (plist-get entry :started)))
     (insert " ")
@@ -1472,8 +1481,8 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
      'my-files-agent-shell-conversation-key key
      'my-files-agent-shell-section my-files-agent-shell--rendering-section
      'follow-link t
-     'help-echo (format "Resume %s session%s"
-                        agent
+     'help-echo (format "%s\nResume %s session%s"
+                        full-title agent
                         (if started (format " from %s" started) ""))
      'face 'default)
     (my-files-agent-shell--insert-conversation-actions key)

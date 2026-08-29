@@ -147,6 +147,25 @@
         (should (equal (plist-get (car entries) :title)
                        "Build the area and project browser."))))))
 
+(ert-deftest my-files-agent-shell-preserves-complete-saved-title-for-hover ()
+  (my-files-agent-shell-test--with-tree ()
+    (let* ((project (expand-file-name "Work/Project" root))
+           (file (expand-file-name ".agent-shell/transcripts/long.md"
+                                   project))
+           (title (concat "Review this complete conversation title: "
+                          (make-string 100 ?x))))
+      (make-directory (file-name-directory file) t)
+      (write-region
+       (concat "# Agent Shell Transcript\n\n"
+               "**Agent:** Codex\n"
+               "**Session ID:** long-title-session\n\n---\n\n"
+               "## User\n\n" title "\n")
+       nil file nil 'silent)
+      (let ((entry (my-files-agent-shell--read-transcript file project)))
+        (should (equal (plist-get entry :full-title) title))
+        (should (< (length (plist-get entry :title)) (length title)))
+        (should (string-suffix-p "…" (plist-get entry :title)))))))
+
 (ert-deftest my-files-agent-shell-centralizes-agent-data-at-workspace-root ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((project (expand-file-name "Work/Project" root))
@@ -844,6 +863,61 @@
                 (should (equal (button-label next-row)
                                "[ready] second chat"))))))
       (mapc #'kill-buffer (list first second)))))
+
+(ert-deftest my-files-agent-shell-shows-complete-titles-on-hover ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let* ((chat (generate-new-buffer " hover live chat"))
+           (live-title "Complete live conversation title")
+           (saved-title "Saved conversation title…")
+           (saved-full-title "Complete saved conversation title")
+           (saved (list :session-id "hover-saved"
+                        :agent "Codex"
+                        :started "2026-08-29"
+                        :title saved-title
+                        :full-title saved-full-title))
+           (codex-title "Complete Codex conversation title")
+           (thread `((id . "hover-codex")
+                     (name . ,codex-title)
+                     (status . ((type . "notLoaded"))))))
+      (unwind-protect
+          (progn
+            (my-files-agent-shell-test--set-session-id chat "hover-live")
+            (cl-letf (((symbol-function 'my-files-agent-shell--chat-title)
+                       (lambda (_buffer) live-title))
+                      ((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore))
+              (my-files-agent-shell--render-chat-lists
+               (list chat) (list saved) (list thread)))
+            (with-current-buffer my-files-agent-shell--chat-buffer-name
+              (let ((live-button
+                     (my-files-agent-shell-test--button-with-property
+                      'my-files-agent-shell-conversation-key
+                      "agent:hover-live"))
+                    (saved-button
+                     (my-files-agent-shell-test--button-with-property
+                      'my-files-agent-shell-conversation-key
+                      "agent:hover-saved"))
+                    (codex-button
+                     (my-files-agent-shell-test--button-with-property
+                      'my-files-agent-shell-conversation-key
+                      "codex:hover-codex")))
+                (should (equal (button-get live-button 'help-echo)
+                               (concat live-title
+                                       "\nOpen this live conversation")))
+                (should (equal (button-get saved-button 'help-echo)
+                               (concat saved-full-title
+                                       "\nResume Codex session from "
+                                       "2026-08-29")))
+                (should (equal (button-get codex-button 'help-echo)
+                               (concat codex-title
+                                       "\nResume this Codex task in "
+                                       "Agent Shell"))))))
+        (kill-buffer chat)))))
 
 (ert-deftest my-files-agent-shell-caches-saved-chat-metadata ()
   (my-files-agent-shell-test--with-tree
