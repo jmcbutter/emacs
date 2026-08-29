@@ -187,8 +187,8 @@ of the conversation to confirm that the correct session was restored."
   "User-assigned workflow stages in display order.")
 
 (defconst my-files-agent-shell--chat-sections
-  `((active . "Active Conversations")
-    ,@my-files-agent-shell--workflow-stages
+  `(,@my-files-agent-shell--workflow-stages
+    (active . "Active Conversations")
     (archived . "Archived"))
   "Conversation sections in display order.")
 
@@ -1796,7 +1796,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
   "Return three panel widths suitable for TOTAL-WIDTH.
 
 REQUESTED-WIDTHS defaults to the three configured preferred widths.  The
-combined result never exceeds half of TOTAL-WIDTH."
+combined result never exceeds half of TOTAL-WIDTH.  Areas and Projects receive
+their requested space before the Conversations panel uses the remainder."
   (let* ((requested
           (mapcar
            (lambda (width)
@@ -1814,25 +1815,43 @@ combined result never exceeds half of TOTAL-WIDTH."
       (user-error
        "Frame is too narrow: need at least %d columns"
        (+ minimum-total my-files-agent-shell-minimum-main-width)))
-    (if (<= requested-total available)
-        requested
-      (let* ((extra (- available minimum-total))
-             (requested-extra
-              (mapcar (lambda (width)
-                        (max 0 (- width my-files-agent-shell-minimum-panel-width)))
-                      requested))
-             (requested-extra-total (max 1 (apply #'+ requested-extra)))
-             (widths
-              (mapcar
-               (lambda (width-extra)
-                 (+ my-files-agent-shell-minimum-panel-width
-                    (floor (* extra width-extra)
-                           requested-extra-total)))
-               requested-extra)))
-        ;; Rounding down can leave a few columns unused.  Give them to chats.
-        (setf (nth 2 widths)
-              (+ (nth 2 widths) (- available (apply #'+ widths))))
-        widths))))
+    (cond
+     ((<= requested-total available)
+      requested)
+     ((<= (+ (nth 0 requested) (nth 1 requested))
+          (- available my-files-agent-shell-minimum-panel-width))
+      (list (nth 0 requested)
+            (nth 1 requested)
+            (- available (nth 0 requested) (nth 1 requested))))
+     (t
+      (let* ((priority-available
+              (- available my-files-agent-shell-minimum-panel-width))
+             (priority-extra
+              (- priority-available
+                 (* 2 my-files-agent-shell-minimum-panel-width)))
+             (area-extra
+              (- (nth 0 requested)
+                 my-files-agent-shell-minimum-panel-width))
+             (project-extra
+              (- (nth 1 requested)
+                 my-files-agent-shell-minimum-panel-width))
+             (requested-priority-extra
+              (max 1 (+ area-extra project-extra)))
+             (area-width
+              (+ my-files-agent-shell-minimum-panel-width
+                 (floor (* priority-extra area-extra)
+                        requested-priority-extra)))
+             (project-width
+              (+ my-files-agent-shell-minimum-panel-width
+                 (floor (* priority-extra project-extra)
+                        requested-priority-extra))))
+        ;; Keep Conversations at its minimum and use any rounding remainder
+        ;; for the prioritized Projects panel.
+        (setq project-width
+              (+ project-width
+                 (- priority-available area-width project-width)))
+        (list area-width project-width
+              my-files-agent-shell-minimum-panel-width))))))
 
 (defun my-files-agent-shell--resize-panels-to-content ()
   "Resize live browser panels to fit text within half the workspace."

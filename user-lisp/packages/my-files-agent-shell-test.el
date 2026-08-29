@@ -451,11 +451,11 @@
                        (body (button-get
                               in-progress-button
                               'my-files-agent-shell-body-overlay)))
-                  (should (< active-position
-                             in-progress-position
+                  (should (< in-progress-position
                              review-position
                              staged-position
                              completed-position
+                             active-position
                              archived-position))
                   (should in-progress-button)
                   (should-not (overlay-get body 'invisible))
@@ -522,7 +522,7 @@
 (ert-deftest my-files-agent-shell-scales-panels-to-preserve-main-window ()
   (let ((my-files-agent-shell-area-width 20)
         (my-files-agent-shell-project-width 30)
-        (my-files-agent-shell-chat-width 40)
+        (my-files-agent-shell-chat-width 400)
         (my-files-agent-shell-minimum-panel-width 10)
         (my-files-agent-shell-minimum-main-width 40))
     (should
@@ -530,11 +530,9 @@
              150 '(12 14 16))
             '(12 14 16)))
     (let ((scaled (my-files-agent-shell--scaled-panel-widths 150)))
-      (should (= (apply #'+ scaled) 75))
-      (should (seq-every-p (lambda (width) (>= width 10)) scaled)))
+      (should (equal scaled '(20 30 25))))
     (let ((scaled (my-files-agent-shell--scaled-panel-widths 100)))
-      (should (= (apply #'+ scaled) 50))
-      (should (seq-every-p (lambda (width) (>= width 10)) scaled)))))
+      (should (equal scaled '(16 24 10))))))
 
 (ert-deftest my-files-agent-shell-sizes-panels-from-visible-text ()
   (let* ((area-name " *My Files Width Test Areas*")
