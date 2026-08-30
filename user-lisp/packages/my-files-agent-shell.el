@@ -1640,17 +1640,22 @@ All other text properties at POSITION are preserved."
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
+(defun my-files-agent-shell--display-chat-buffer (buffer)
+  "Display live Agent Shell BUFFER in the browser's main window."
+  (unless (buffer-live-p buffer)
+    (my-files-agent-shell-refresh)
+    (user-error "That agent chat is no longer open"))
+  (unless (window-live-p my-files-agent-shell--main-window)
+    (user-error "The My Files main window is no longer available"))
+  (set-window-buffer my-files-agent-shell--main-window buffer)
+  (select-window my-files-agent-shell--main-window)
+  (my-files-agent-shell--update-chat-row-indicators)
+  buffer)
+
 (defun my-files-agent-shell--open-chat (button)
-  "Open the agent-shell buffer represented by BUTTON in the main window."
-  (let ((buffer (button-get button 'my-files-agent-shell-buffer)))
-    (unless (buffer-live-p buffer)
-      (my-files-agent-shell-refresh)
-      (user-error "That agent chat is no longer open"))
-    (unless (window-live-p my-files-agent-shell--main-window)
-      (user-error "The My Files main window is no longer available"))
-    (set-window-buffer my-files-agent-shell--main-window buffer)
-    (select-window my-files-agent-shell--main-window)
-    (my-files-agent-shell--update-chat-row-indicators)))
+  "Open the Agent Shell buffer represented by BUTTON in the main window."
+  (my-files-agent-shell--display-chat-buffer
+   (button-get button 'my-files-agent-shell-buffer)))
 
 (defun my-files-agent-shell--insert-codex-chat-button (thread)
   "Insert a workflow-controlled row for Codex THREAD."
@@ -1834,33 +1839,39 @@ All other text properties at POSITION are preserved."
 (defun my-files-agent-shell--start-resumed-chat
     (session-id agent-name directory)
   "Resume SESSION-ID for AGENT-NAME in DIRECTORY and show it in the main pane."
-  (my-files-agent-shell--ensure-agent-shell-ready)
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
-  (unless directory
-    (user-error "That chat has no working directory"))
-  (let* ((config (my-files-agent-shell--agent-config agent-name))
-         (resume-directory
-          (my-files-agent-shell--canonical-directory directory))
-         (agent-shell-session-restore-verbosity
-          my-files-agent-shell-session-restore-verbosity)
-         (buffer
-          (with-selected-window my-files-agent-shell--main-window
-            (let ((default-directory resume-directory))
-              (if config
-                  (agent-shell-start :config config :session-id session-id)
-                (let ((agent-shell-preferred-agent-config nil))
-                  (agent-shell-resume-session session-id)))))))
-    ;; Agent startup completes asynchronously.  Keep the display policy
-    ;; buffer-local so session/load callbacks see it after this call returns.
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (setq-local agent-shell-session-restore-verbosity
-                    my-files-agent-shell-session-restore-verbosity))
-      (set-window-buffer my-files-agent-shell--main-window buffer)
-      (select-window my-files-agent-shell--main-window))
-    (my-files-agent-shell--schedule-refresh)
-    buffer))
+  (if-let* ((buffer
+             (my-files-agent-shell--buffer-with-session-id
+              session-id (agent-shell-buffers))))
+      (progn
+        (my-files-agent-shell--display-chat-buffer buffer)
+        (my-files-agent-shell--schedule-refresh)
+        buffer)
+    (my-files-agent-shell--ensure-agent-shell-ready)
+    (unless directory
+      (user-error "That chat has no working directory"))
+    (let* ((config (my-files-agent-shell--agent-config agent-name))
+           (resume-directory
+            (my-files-agent-shell--canonical-directory directory))
+           (agent-shell-session-restore-verbosity
+            my-files-agent-shell-session-restore-verbosity)
+           (buffer
+            (with-selected-window my-files-agent-shell--main-window
+              (let ((default-directory resume-directory))
+                (if config
+                    (agent-shell-start :config config :session-id session-id)
+                  (let ((agent-shell-preferred-agent-config nil))
+                    (agent-shell-resume-session session-id)))))))
+      ;; Agent startup completes asynchronously.  Keep the display policy
+      ;; buffer-local so session/load callbacks see it after this call returns.
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq-local agent-shell-session-restore-verbosity
+                      my-files-agent-shell-session-restore-verbosity))
+        (my-files-agent-shell--display-chat-buffer buffer))
+      (my-files-agent-shell--schedule-refresh)
+      buffer)))
 
 (defun my-files-agent-shell--resume-chat (button)
   "Resume the saved agent-shell session represented by BUTTON."

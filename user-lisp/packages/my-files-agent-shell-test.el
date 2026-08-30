@@ -973,6 +973,38 @@
                    (my-files-agent-shell--canonical-directory project)))
     (should (eq restore-verbosity 'first-last))))
 
+(ert-deftest my-files-agent-shell-opens-existing-buffer-instead-of-resuming ()
+  (let* ((project (make-temp-file "agent-shell-open-existing-" t))
+         (chat (generate-new-buffer " existing tool-created chat"))
+         (other (generate-new-buffer " existing chat placeholder"))
+         (thread `((id . "already-open-session")
+                   (cwd . ,project)
+                   (name . "Already open from browser")))
+         (my-files-agent-shell--main-window (selected-window)))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer my-files-agent-shell--main-window other)
+          (my-files-agent-shell-test--set-session-id
+           chat "already-open-session")
+          (with-temp-buffer
+            (insert-text-button
+             "Open"
+             'my-files-agent-shell-codex-entry thread)
+            (let ((button (button-at (point-min))))
+              (cl-letf (((symbol-function 'agent-shell-buffers)
+                         (lambda () (list chat)))
+                        ((symbol-function 'agent-shell-start)
+                         (lambda (&rest _arguments)
+                           (user-error "Couldn't resume session")))
+                        ((symbol-function
+                          'my-files-agent-shell--schedule-refresh)
+                         #'ignore))
+                (my-files-agent-shell--open-codex-chat button))))
+          (should
+           (eq (window-buffer my-files-agent-shell--main-window) chat)))
+      (mapc #'kill-buffer (list chat other))
+      (delete-directory project t))))
+
 (ert-deftest my-files-agent-shell-filters-chats-by-selected-area ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((area (expand-file-name "Work" root))
