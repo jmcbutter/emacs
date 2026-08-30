@@ -58,6 +58,12 @@
       (setq button (next-button (button-end button))))
     button))
 
+(defun my-files-agent-shell-test--button-prefix (button)
+  "Return the text on BUTTON's line before BUTTON."
+  (save-excursion
+    (goto-char (button-start button))
+    (buffer-substring-no-properties (line-beginning-position) (point))))
+
 (ert-deftest my-files-agent-shell-discovers-only-marked-top-level-areas ()
   (my-files-agent-shell-test--with-tree ()
     (dolist (name '("Zulu" "alpha" "Unmarked"))
@@ -583,9 +589,11 @@
                      ("C-p" . my-files-agent-shell-previous-item)
                      ("C-f" . my-files-agent-shell-next-panel)
                      ("C-b" . my-files-agent-shell-previous-panel)
+                     ("SPC" . my-files-agent-shell-toggle-mark-at-point)
                      ("a" . my-files-agent-shell-archive-at-point)
                      ("m" . my-files-agent-shell-move-at-point)
-                     ("u" . my-files-agent-shell-restore-at-point)))
+                     ("u" . my-files-agent-shell-restore-at-point)
+                     ("U" . my-files-agent-shell-unmark-all)))
     (should (eq (keymap-lookup my-files-agent-shell-mode-map (car binding))
                 (cdr binding))))
   (dolist (key '("h" "j" "k" "l"))
@@ -1046,6 +1054,340 @@
             (my-files-agent-shell--buffer-list-updated))
           (should (= refresh-count 1)))
       (mapc #'kill-buffer (list chat other)))))
+
+(ert-deftest my-files-agent-shell-updates-busy-status-without-rerendering ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let ((chat (generate-new-buffer " status-only chat"))
+          (status 'ready)
+          subscriptions
+          (refresh-count 0))
+      (unwind-protect
+          (progn
+            (my-files-agent-shell-test--set-session-id chat "status-only")
+            (cl-letf (((symbol-function 'agent-shell-subscribe-to)
+                       (lambda (&rest arguments)
+                         (push (cons (plist-get arguments :event)
+                                     (plist-get arguments :on-event))
+                               subscriptions)))
+                      ((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) status))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       #'buffer-name)
+                      ((symbol-function
+                        'my-files-agent-shell--schedule-refresh)
+                       (lambda (&rest _arguments)
+                         (cl-incf refresh-count))))
+              (my-files-agent-shell--render-chat-lists (list chat) nil)
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (let* ((button
+                        (my-files-agent-shell-test--button-with-property
+                         'my-files-agent-shell-conversation-key
+                         "agent:status-only"))
+                       (before (buffer-string)))
+                  (goto-char (button-start button))
+                  (setq status 'busy)
+                  (funcall (alist-get 'input-submitted subscriptions)
+                           '((:event . input-submitted)))
+                  (should (= refresh-count 0))
+                  (should
+                   (equal (buffer-string)
+                          (replace-regexp-in-string
+                           "\\[ready\\]" "[busy]" before t t)))
+                  (should
+                   (equal
+                    (button-get (button-at (point))
+                                'my-files-agent-shell-conversation-key)
+                    "agent:status-only"))))))
+        (kill-buffer chat)))))
+
+(ert-deftest my-files-agent-shell-codex-poll-updates-only-status-brackets ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let* ((first
+            '((id . "first-codex-status")
+              (cwd . "/tmp/first")
+              (name . "First Codex status")
+              (status . ((type . "notLoaded")))))
+           (second
+            '((id . "second-codex-status")
+              (cwd . "/tmp/second")
+              (name . "Second Codex status")
+              (status . ((type . "notLoaded")))))
+           (active-first
+            '((id . "first-codex-status")
+              (cwd . "/tmp/first")
+              (name . "First Codex status")
+              (status . ((type . "active")))))
+           (my-files-agent-shell--codex-threads (list first second))
+           (my-files-agent-shell--codex-error nil)
+           (my-files-agent-shell--codex-refreshing t)
+           (my-files-agent-shell--codex-last-refresh-time nil)
+           (refresh-count 0))
+      (cl-letf (((symbol-function 'agent-shell-buffers) #'ignore)
+                ((symbol-function 'codex-ide--request-async)
+                 (lambda (_session _method _params callback)
+                   (funcall callback
+                            `((data . ,(list second active-first)))
+                            nil)))
+                ((symbol-function 'my-files-agent-shell--schedule-refresh)
+                 (lambda (&rest _arguments)
+                   (cl-incf refresh-count))))
+        (my-files-agent-shell--render-chat-lists
+         nil nil my-files-agent-shell--codex-threads)
+        (my-files-agent-shell--codex-list-page 'session nil nil)
+        (should (= refresh-count 0))
+        (with-current-buffer my-files-agent-shell--chat-buffer-name
+          (let ((text (buffer-string)))
+            (should (string-match-p
+                     "\\[codex:active\\] First Codex status" text))
+            (should (< (string-match "First Codex status" text)
+                       (string-match "Second Codex status" text)))))))))
+
+(ert-deftest my-files-agent-shell-marks-current-and-open-conversations ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let ((current (generate-new-buffer " current chat"))
+          (open (generate-new-buffer " open chat"))
+          (other (generate-new-buffer " main window placeholder")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (let ((my-files-agent-shell--main-window (selected-window)))
+              (my-files-agent-shell-test--set-session-id current "current")
+              (my-files-agent-shell-test--set-session-id open "open")
+              (set-window-buffer my-files-agent-shell--main-window current)
+              (cl-letf (((symbol-function 'agent-shell-buffers)
+                         (lambda () (list current open)))
+                        ((symbol-function
+                          'my-files-agent-shell--chat-status-symbol)
+                         (lambda (_buffer) 'ready))
+                        ((symbol-function 'my-files-agent-shell--chat-title)
+                         #'buffer-name)
+                        ((symbol-function
+                          'my-files-agent-shell--subscribe-chat)
+                         #'ignore))
+                (my-files-agent-shell--render-chat-lists
+                 (list current open) nil
+                 '(((id . "open")
+                    (name . "Open Codex task")
+                    (status . ((type . "notLoaded"))))))
+                (with-current-buffer my-files-agent-shell--chat-buffer-name
+                  (let ((current-button
+                         (my-files-agent-shell-test--button-with-property
+                          'my-files-agent-shell-conversation-key
+                          "agent:current"))
+                        (open-button
+                         (my-files-agent-shell-test--button-with-property
+                          'my-files-agent-shell-conversation-key
+                          "agent:open"))
+                        (codex-button
+                         (my-files-agent-shell-test--button-with-property
+                          'my-files-agent-shell-conversation-key
+                          "codex:open")))
+                    (should (string-match-p
+                             "▶"
+                             (my-files-agent-shell-test--button-prefix
+                              current-button)))
+                    (should (string-match-p
+                             "●"
+                             (my-files-agent-shell-test--button-prefix
+                              open-button)))
+                    (should (string-match-p
+                             "●"
+                             (my-files-agent-shell-test--button-prefix
+                              codex-button)))))
+                (set-window-buffer my-files-agent-shell--main-window open)
+                (my-files-agent-shell--update-chat-row-indicators)
+                (with-current-buffer my-files-agent-shell--chat-buffer-name
+                  (let ((current-button
+                         (my-files-agent-shell-test--button-with-property
+                          'my-files-agent-shell-conversation-key
+                          "agent:current"))
+                        (open-button
+                         (my-files-agent-shell-test--button-with-property
+                          'my-files-agent-shell-conversation-key
+                          "agent:open")))
+                    (should (string-match-p
+                             "●"
+                             (my-files-agent-shell-test--button-prefix
+                              current-button)))
+                    (should (string-match-p
+                             "▶"
+                             (my-files-agent-shell-test--button-prefix
+                              open-button))))))
+              (set-window-buffer my-files-agent-shell--main-window other)))
+        (mapc #'kill-buffer (list current open other))))))
+
+(ert-deftest my-files-agent-shell-keeps-inactive-chat-highlight-after-render ()
+  (let ((first (generate-new-buffer " first highlighted chat"))
+        (second (generate-new-buffer " second highlighted chat"))
+        (other (generate-new-buffer " selected main buffer"))
+        (my-files-agent-shell--selected-project default-directory))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let ((main-window (selected-window))
+                (chat-window (split-window-right)))
+            (set-window-buffer main-window other)
+            (my-files-agent-shell-test--set-session-id first "first-highlight")
+            (my-files-agent-shell-test--set-session-id
+             second "second-highlight")
+            (cl-letf (((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       #'buffer-name)
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore))
+              (my-files-agent-shell--render-chat-lists
+               (list first second) nil)
+              (set-window-buffer chat-window
+                                 my-files-agent-shell--chat-buffer-name)
+              (with-selected-window chat-window
+                (goto-char
+                 (button-start
+                  (my-files-agent-shell-test--button-with-property
+                   'my-files-agent-shell-conversation-key
+                   "agent:second-highlight")))
+                (my-files-agent-shell--remember-panel-selection)
+                (hl-line-highlight))
+              (select-window main-window)
+              (my-files-agent-shell--render-chat-lists
+               (list first second) nil)
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (let ((button (button-at (window-point chat-window))))
+                  (should
+                   (equal
+                    (button-get button
+                                'my-files-agent-shell-conversation-key)
+                    "agent:second-highlight"))
+                  (should (overlayp hl-line-overlay))
+                  (should
+                   (= (line-number-at-pos (overlay-start hl-line-overlay))
+                      (line-number-at-pos (button-start button)))))))))
+      (mapc #'kill-buffer (list first second other)))))
+
+(ert-deftest my-files-agent-shell-batch-moves-and-archives-marked-chats ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let ((first (generate-new-buffer " first marked chat"))
+          (second (generate-new-buffer " second marked chat")))
+      (unwind-protect
+          (progn
+            (my-files-agent-shell-test--set-session-id first "first-marked")
+            (my-files-agent-shell-test--set-session-id second "second-marked")
+            (cl-letf (((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       #'buffer-name)
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore)
+                      ((symbol-function 'completing-read)
+                       (lambda (&rest _arguments) "Review"))
+                      ((symbol-function 'yes-or-no-p)
+                       (lambda (_prompt) t))
+                      ((symbol-function
+                        'my-files-agent-shell--schedule-refresh)
+                       (lambda (&rest _arguments)
+                         (my-files-agent-shell--render-chat-lists
+                          (list first second) nil))))
+              (my-files-agent-shell--render-chat-lists
+               (list first second) nil)
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (dolist (key '("agent:first-marked"
+                               "agent:second-marked"))
+                  (goto-char
+                   (button-start
+                    (my-files-agent-shell-test--button-with-property
+                     'my-files-agent-shell-conversation-key key)))
+                  (my-files-agent-shell-toggle-mark-at-point))
+                (goto-char
+                 (button-start
+                  (my-files-agent-shell-test--button-with-property
+                   'my-files-agent-shell-conversation-key
+                   "agent:first-marked")))
+                (my-files-agent-shell-move-at-point))
+              (dolist (key '("agent:first-marked"
+                             "agent:second-marked"))
+                (should (eq (my-files-agent-shell--conversation-stage key)
+                            'review)))
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (should-not my-files-agent-shell--marked-conversation-keys)
+                (dolist (key '("agent:first-marked"
+                               "agent:second-marked"))
+                  (goto-char
+                   (button-start
+                    (my-files-agent-shell-test--button-with-property
+                     'my-files-agent-shell-conversation-key key)))
+                  (my-files-agent-shell-toggle-mark-at-point))
+                (goto-char
+                 (button-start
+                  (my-files-agent-shell-test--button-with-property
+                   'my-files-agent-shell-conversation-key
+                   "agent:first-marked")))
+                (my-files-agent-shell-archive-at-point))
+              (dolist (key '("agent:first-marked"
+                             "agent:second-marked"))
+                (should
+                 (my-files-agent-shell--conversation-archived-p key)))
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (should-not
+                 my-files-agent-shell--marked-conversation-keys))))
+        (mapc #'kill-buffer (list first second))))))
+
+(ert-deftest my-files-agent-shell-move-keeps-selection-at-original-list ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let ((first (generate-new-buffer " first stationary chat"))
+          (moved (generate-new-buffer " moved stationary chat"))
+          (next (generate-new-buffer " next stationary chat")))
+      (unwind-protect
+          (progn
+            (my-files-agent-shell-test--set-session-id first
+                                                       "first-stationary")
+            (my-files-agent-shell-test--set-session-id moved
+                                                       "moved-stationary")
+            (my-files-agent-shell-test--set-session-id next
+                                                       "next-stationary")
+            (cl-letf (((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       #'buffer-name)
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore)
+                      ((symbol-function 'completing-read)
+                       (lambda (&rest _arguments) "Completed"))
+                      ((symbol-function
+                        'my-files-agent-shell--schedule-refresh)
+                       (lambda (&rest _arguments)
+                         (my-files-agent-shell--render-chat-lists
+                          (list first moved next) nil))))
+              (my-files-agent-shell--render-chat-lists
+               (list first moved next) nil)
+              (with-current-buffer my-files-agent-shell--chat-buffer-name
+                (goto-char
+                 (button-start
+                  (my-files-agent-shell-test--button-with-property
+                   'my-files-agent-shell-conversation-key
+                   "agent:moved-stationary")))
+                (my-files-agent-shell-move-at-point)
+                (let ((button (button-at (point))))
+                  (should
+                   (equal
+                    (button-get button
+                                'my-files-agent-shell-conversation-key)
+                    "agent:next-stationary"))
+                  (should
+                   (eq (button-get button 'my-files-agent-shell-section)
+                       'in-progress))))))
+        (mapc #'kill-buffer (list first moved next))))))
 
 (provide 'my-files-agent-shell-test)
 ;;; my-files-agent-shell-test.el ends here

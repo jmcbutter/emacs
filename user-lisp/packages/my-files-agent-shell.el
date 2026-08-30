@@ -22,6 +22,9 @@
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
+;; A leading `▶' identifies the conversation in the main window, `●' marks
+;; conversations with open buffers, and `*' marks conversations selected for a
+;; batch workflow action.  Space toggles a mark and U clears all marks.
 ;; Hovering displays the complete title as help text; keyboard highlighting
 ;; displays it in the echo area.
 
@@ -181,7 +184,11 @@ of the conversation to confirm that the correct session was restored."
 (defvar-local my-files-agent-shell--assigned-project nil)
 (defvar-local my-files-agent-shell--highlighted-button-key nil)
 (defvar-local my-files-agent-shell--selected-path-button nil)
+(defvar-local my-files-agent-shell--marked-conversation-keys nil)
+(defvar-local my-files-agent-shell--pending-selection-key nil)
 (defvar my-files-agent-shell--rendering-section nil)
+(defvar my-files-agent-shell--rendering-live-buffers nil)
+(defvar my-files-agent-shell--rendering-main-chat nil)
 (defvar my-files-agent-shell--echoed-conversation-title nil
   "Last browser-owned conversation title displayed in the echo area.")
 
@@ -198,15 +205,18 @@ of the conversation to confirm that the correct session was restored."
     (archived . "Archived"))
   "Conversation sections in display order.")
 
-(defconst my-files-agent-shell--chat-refresh-events
+(defconst my-files-agent-shell--chat-status-events
   '(input-submitted
     turn-complete
     prompt-ready
     permission-request
     permission-response
-    session-title-changed
     error)
-  "Agent-shell events that can change a chat row's operational status.")
+  "Agent-shell events that change only a chat row's operational status.")
+
+(defconst my-files-agent-shell--chat-refresh-events
+  `(,@my-files-agent-shell--chat-status-events session-title-changed)
+  "Agent-shell events observed by the conversation browser.")
 
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-cwd "agent-shell-project")
@@ -417,9 +427,11 @@ of the conversation to confirm that the correct session was restored."
   "2" #'my-files-agent-shell-focus-projects
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
+  "SPC" #'my-files-agent-shell-toggle-mark-at-point
   "a" #'my-files-agent-shell-archive-at-point
   "m" #'my-files-agent-shell-move-at-point
   "u" #'my-files-agent-shell-restore-at-point
+  "U" #'my-files-agent-shell-unmark-all
   "RET" #'push-button
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
@@ -517,10 +529,14 @@ of the conversation to confirm that the correct session was restored."
 
 (defun my-files-agent-shell--selected-button-key ()
   "Return the current primary button's stable selection key, or nil."
-  (or (when-let* ((button (button-at (point))))
+  (let* ((window (get-buffer-window (current-buffer) t))
+         (position (if (window-live-p window)
+                       (window-point window)
+                     (point))))
+    (or (when-let* ((button (and position (button-at position))))
         (unless (button-get button 'my-files-agent-shell-secondary-action)
           (my-files-agent-shell--button-selection-key button)))
-      my-files-agent-shell--highlighted-button-key))
+        my-files-agent-shell--highlighted-button-key)))
 
 (defun my-files-agent-shell--remember-panel-selection ()
   "Remember the primary button currently highlighted in this panel."
@@ -556,7 +572,14 @@ of the conversation to confirm that the correct session was restored."
           (and button
                (my-files-agent-shell--button-selection-key button)))
     (when button
-      (goto-char (button-start button)))))
+      (let ((position (button-start button)))
+        (goto-char position)
+        (dolist (window (get-buffer-window-list (current-buffer) nil t))
+          (set-window-point window position)
+          (when hl-line-mode
+            (with-selected-window window
+              (goto-char position)
+              (hl-line-highlight))))))))
 
 (defun my-files-agent-shell--move-item (direction)
   "Move to the next visible item in DIRECTION, wrapping at the ends."
@@ -839,6 +862,28 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
     (or (car (split-string (string-trim title) "\n" t))
         "Untitled Codex task")))
 
+(defun my-files-agent-shell--codex-thread-render-signature (thread)
+  "Return the row-layout fields for Codex THREAD, excluding runtime status."
+  (list (alist-get 'id thread)
+        (alist-get 'cwd thread)
+        (my-files-agent-shell--codex-thread-title thread)))
+
+(defun my-files-agent-shell--same-codex-row-layout-p (left right)
+  "Return non-nil when LEFT and RIGHT render the same Codex task rows."
+  (and
+   (= (length left) (length right))
+   (let ((right-by-id (make-hash-table :test #'equal)))
+     (dolist (thread right)
+       (puthash (alist-get 'id thread)
+                (my-files-agent-shell--codex-thread-render-signature thread)
+                right-by-id))
+     (seq-every-p
+      (lambda (thread)
+        (equal
+         (my-files-agent-shell--codex-thread-render-signature thread)
+         (gethash (alist-get 'id thread) right-by-id 'missing)))
+      left))))
+
 (defun my-files-agent-shell--codex-session-live-p ()
   "Return non-nil when the browser's Codex query session is live."
   (and my-files-agent-shell--codex-session
@@ -886,11 +931,22 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
          (if next-cursor
              (my-files-agent-shell--codex-list-page
               session next-cursor all-threads)
-           (setq my-files-agent-shell--codex-threads all-threads
-                 my-files-agent-shell--codex-error nil
-                 my-files-agent-shell--codex-refreshing nil
-                 my-files-agent-shell--codex-last-refresh-time (float-time))
-           (my-files-agent-shell--schedule-refresh)))))))
+           (let ((same-layout
+                  (and (not my-files-agent-shell--codex-error)
+                       (my-files-agent-shell--same-codex-row-layout-p
+                        my-files-agent-shell--codex-threads
+                        all-threads))))
+             (setq my-files-agent-shell--codex-threads all-threads
+                   my-files-agent-shell--codex-error nil
+                   my-files-agent-shell--codex-refreshing nil
+                   my-files-agent-shell--codex-last-refresh-time
+                   (float-time))
+             (if same-layout
+                 (progn
+                   (my-files-agent-shell--update-codex-status-labels
+                    all-threads)
+                   (my-files-agent-shell--update-chat-row-indicators))
+               (my-files-agent-shell--schedule-refresh)))))))))
 
 (defun my-files-agent-shell--codex-list-threads (session)
   "Refresh cached Codex tasks using initialized SESSION."
@@ -1156,6 +1212,288 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   "Return non-nil when conversation KEY is archived."
   (plist-get (my-files-agent-shell--conversation-state key) :archived))
 
+(defun my-files-agent-shell--buffer-with-session-id (session-id buffers)
+  "Return the member of BUFFERS whose session ID is SESSION-ID."
+  (and session-id
+       (seq-find
+        (lambda (buffer)
+          (equal (my-files-agent-shell--live-session-id buffer) session-id))
+        buffers)))
+
+(defun my-files-agent-shell--conversation-row-state
+    (buffer session-id live-buffers main-chat)
+  "Return the display state for a conversation row.
+
+BUFFER is its live buffer when known, SESSION-ID is its resumable identifier,
+LIVE-BUFFERS are all open Agent Shell buffers, and MAIN-CHAT is the Agent Shell
+buffer displayed in the main browser window."
+  (let ((open-buffer
+         (or (and (buffer-live-p buffer) buffer)
+             (my-files-agent-shell--buffer-with-session-id
+              session-id live-buffers))))
+    (cond
+     ((and main-chat
+           (or (eq open-buffer main-chat)
+               (and session-id
+                    (equal session-id
+                           (my-files-agent-shell--live-session-id
+                            main-chat)))))
+      'current)
+     (open-buffer 'open)
+     (t nil))))
+
+(defun my-files-agent-shell--row-state-character (state)
+  "Return the one-character row indicator for STATE."
+  (pcase state
+    ('current "▶")
+    ('open "●")
+    (_ " ")))
+
+(defun my-files-agent-shell--row-state-face (state)
+  "Return the face for conversation row STATE."
+  (pcase state
+    ('current 'font-lock-keyword-face)
+    ('open 'success)
+    (_ 'default)))
+
+(defun my-files-agent-shell--insert-conversation-prefix
+    (key &optional buffer session-id)
+  "Insert batch and open-state indicators for conversation KEY.
+
+BUFFER and SESSION-ID identify a live or resumable conversation."
+  (let ((state
+         (my-files-agent-shell--conversation-row-state
+          buffer session-id
+          my-files-agent-shell--rendering-live-buffers
+          my-files-agent-shell--rendering-main-chat)))
+    (insert " ")
+    (insert
+     (propertize
+      (if (member key my-files-agent-shell--marked-conversation-keys)
+          "*"
+        " ")
+      'my-files-agent-shell-mark-key key
+      'face (if (member key my-files-agent-shell--marked-conversation-keys)
+                'font-lock-warning-face
+              'default)))
+    (insert " ")
+    (insert
+     (propertize
+      (my-files-agent-shell--row-state-character state)
+      'my-files-agent-shell-indicator-key key
+      'my-files-agent-shell-indicator-buffer buffer
+      'my-files-agent-shell-indicator-session-id session-id
+      'face (my-files-agent-shell--row-state-face state)))
+    (insert " ")))
+
+(defun my-files-agent-shell--replace-property-character
+    (position character face)
+  "Replace the character at POSITION with CHARACTER and apply FACE.
+
+All other text properties at POSITION are preserved."
+  (let ((properties (text-properties-at position))
+        (inhibit-read-only t))
+    (setq properties (plist-put properties 'face face))
+    (save-excursion
+      (goto-char position)
+      (delete-char 1)
+      (insert (apply #'propertize character properties)))))
+
+(defun my-files-agent-shell--update-chat-row-indicators (&optional _frame)
+  "Update open-buffer and current-window indicators without rebuilding rows."
+  (when-let* ((panel (get-buffer my-files-agent-shell--chat-buffer-name)))
+    (let* ((live-buffers (agent-shell-buffers))
+           (main-buffer
+            (and (window-live-p my-files-agent-shell--main-window)
+                 (window-buffer my-files-agent-shell--main-window)))
+           (main-chat (and (memq main-buffer live-buffers) main-buffer)))
+      (with-current-buffer panel
+        (let ((position (point-min)))
+          (while (< position (point-max))
+            (let ((key (get-text-property
+                        position 'my-files-agent-shell-indicator-key)))
+              (if (not key)
+                  (setq position
+                        (or (next-single-property-change
+                             position
+                             'my-files-agent-shell-indicator-key
+                             nil (point-max))
+                            (point-max)))
+                (let* ((buffer
+                        (get-text-property
+                         position 'my-files-agent-shell-indicator-buffer))
+                       (session-id
+                        (get-text-property
+                         position
+                         'my-files-agent-shell-indicator-session-id))
+                       (state
+                        (my-files-agent-shell--conversation-row-state
+                         buffer session-id live-buffers main-chat)))
+                  (my-files-agent-shell--replace-property-character
+                   position
+                   (my-files-agent-shell--row-state-character state)
+                   (my-files-agent-shell--row-state-face state))
+                  (setq position (1+ position)))))))))))
+
+(defun my-files-agent-shell--add-status-properties (start label key)
+  "Mark the status LABEL beginning at START as belonging to conversation KEY."
+  (add-text-properties
+   start (+ start (length label))
+   (list 'my-files-agent-shell-status-key key)))
+
+(defun my-files-agent-shell--replace-status-labels (key label)
+  "Replace only the bracketed status text for conversation KEY with LABEL."
+  (when-let* ((panel (get-buffer my-files-agent-shell--chat-buffer-name)))
+    (with-current-buffer panel
+      (let ((selection-key (my-files-agent-shell--selected-button-key))
+            (position (point-min))
+            (inhibit-read-only t))
+        (while (< position (point-max))
+          (let* ((value (get-text-property
+                         position 'my-files-agent-shell-status-key))
+                 (end
+                  (or (next-single-property-change
+                       position 'my-files-agent-shell-status-key
+                       nil (point-max))
+                      (point-max))))
+            (if (not (equal value key))
+                (setq position end)
+              (let ((properties (text-properties-at position))
+                    (start position))
+                (delete-region start end)
+                (goto-char start)
+                (insert (apply #'propertize label properties))
+                (setq position (+ start (length label)))))))
+        (my-files-agent-shell--restore-button-selection selection-key)))))
+
+(defun my-files-agent-shell--update-live-chat-status (buffer)
+  "Update only the bracketed runtime status for live Agent Shell BUFFER."
+  (when-let* ((key (my-files-agent-shell--live-conversation-key buffer)))
+    (my-files-agent-shell--replace-status-labels
+     key (format "[%s]" (my-files-agent-shell--chat-status buffer)))))
+
+(defun my-files-agent-shell--update-codex-status-labels (threads)
+  "Update only bracketed Codex status labels for THREADS."
+  (dolist (thread threads)
+    (let ((status (my-files-agent-shell--codex-thread-status thread)))
+      (my-files-agent-shell--replace-status-labels
+       (my-files-agent-shell--codex-conversation-key thread)
+       (if (string= status "active") "[codex:active]" "[codex]")))))
+
+(defun my-files-agent-shell--update-conversation-markers ()
+  "Update batch-selection markers without rebuilding conversation rows."
+  (when-let* ((panel (get-buffer my-files-agent-shell--chat-buffer-name)))
+    (with-current-buffer panel
+      (let ((position (point-min)))
+        (while (< position (point-max))
+          (let ((key (get-text-property
+                      position 'my-files-agent-shell-mark-key)))
+            (if (not key)
+                (setq position
+                      (or (next-single-property-change
+                           position 'my-files-agent-shell-mark-key
+                           nil (point-max))
+                          (point-max)))
+              (let ((marked
+                     (member key
+                             my-files-agent-shell--marked-conversation-keys)))
+                (my-files-agent-shell--replace-property-character
+                 position (if marked "*" " ")
+                 (if marked 'font-lock-warning-face 'default))
+                (setq position (1+ position))))))))))
+
+(defun my-files-agent-shell--visible-marked-conversation-keys ()
+  "Return marked conversation keys that are visible in this panel."
+  (delete-dups
+   (delq
+    nil
+    (mapcar
+     (lambda (button)
+       (let ((key
+              (button-get button
+                          'my-files-agent-shell-conversation-key)))
+         (and (member key my-files-agent-shell--marked-conversation-keys)
+              key)))
+     (my-files-agent-shell--visible-buttons)))))
+
+(defun my-files-agent-shell--conversation-keys-for-action ()
+  "Return marked conversation keys, or the highlighted key when none are marked."
+  (or (my-files-agent-shell--visible-marked-conversation-keys)
+      (list (my-files-agent-shell--conversation-key-at-point))))
+
+(defun my-files-agent-shell-toggle-mark-at-point ()
+  "Toggle batch selection for the highlighted conversation."
+  (interactive)
+  (let ((key (my-files-agent-shell--conversation-key-at-point)))
+    (if (member key my-files-agent-shell--marked-conversation-keys)
+        (setq my-files-agent-shell--marked-conversation-keys
+              (delete key my-files-agent-shell--marked-conversation-keys))
+      (push key my-files-agent-shell--marked-conversation-keys))
+    (my-files-agent-shell--update-conversation-markers)
+    (my-files-agent-shell-next-item)))
+
+(defun my-files-agent-shell-unmark-all ()
+  "Clear all batch-selected conversations in the chat panel."
+  (interactive)
+  (setq my-files-agent-shell--marked-conversation-keys nil)
+  (my-files-agent-shell--update-conversation-markers)
+  (message "Cleared conversation selection"))
+
+(defun my-files-agent-shell--selection-key-after-removal (keys section)
+  "Return a nearby selection key after KEYS leave conversation SECTION."
+  (let* ((current (button-at (point)))
+         (position (and current (button-start current)))
+         (buttons (my-files-agent-shell--visible-buttons))
+         (eligible
+          (seq-filter
+           (lambda (button)
+             (let ((key
+                    (button-get
+                     button 'my-files-agent-shell-conversation-key)))
+               (and key
+                    (eq (button-get button 'my-files-agent-shell-section)
+                        section)
+                    (not (member key keys)))))
+           buttons))
+         (next
+          (and position
+               (seq-find
+                (lambda (button) (> (button-start button) position))
+                eligible)))
+         (previous
+          (and position
+               (car
+                (last
+                 (seq-filter
+                  (lambda (button) (< (button-start button) position))
+                  eligible)))))
+         (heading
+          (seq-find
+           (lambda (button)
+             (eq (button-get button 'my-files-agent-shell-category) section))
+           buttons)))
+    (when-let* ((button (or next previous heading)))
+      (my-files-agent-shell--button-selection-key button))))
+
+(defun my-files-agent-shell--prepare-selection-before-removal
+    (keys retained-sections)
+  "Anchor selection before KEYS leave every section but RETAINED-SECTIONS."
+  (when-let* ((button (button-at (point)))
+              (key (button-get
+                    button 'my-files-agent-shell-conversation-key))
+              (section (button-get button 'my-files-agent-shell-section)))
+    (when (and (member key keys) (not (memq section retained-sections)))
+      (setq my-files-agent-shell--pending-selection-key
+            (my-files-agent-shell--selection-key-after-removal
+             keys section)))))
+
+(defun my-files-agent-shell--clear-marks (keys)
+  "Remove conversation KEYS from the batch selection."
+  (dolist (key keys)
+    (setq my-files-agent-shell--marked-conversation-keys
+          (delete key my-files-agent-shell--marked-conversation-keys)))
+  (my-files-agent-shell--update-conversation-markers))
+
 (defun my-files-agent-shell--insert-conversation-action
     (label action key help)
   "Insert a secondary LABEL button invoking ACTION for KEY with HELP text."
@@ -1198,18 +1536,21 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
          (key (my-files-agent-shell--live-conversation-key buffer))
          (status-label (concat "[" (my-files-agent-shell--chat-status buffer)
                                "]")))
-    (insert " ")
-    (insert-text-button
-     (format "%s %s" status-label title)
-     'action #'my-files-agent-shell--open-chat
-     'my-files-agent-shell-buffer buffer
-     'my-files-agent-shell-conversation-key key
-     'my-files-agent-shell-conversation-title title
-     'my-files-agent-shell-section my-files-agent-shell--rendering-section
-     'my-files-agent-shell-action 'open
-     'follow-link t
-     'help-echo (format "%s\nOpen this live conversation" title)
-     'face 'default)
+    (my-files-agent-shell--insert-conversation-prefix
+     key buffer (my-files-agent-shell--live-session-id buffer))
+    (let ((start (point)))
+      (insert-text-button
+       (format "%s %s" status-label title)
+       'action #'my-files-agent-shell--open-chat
+       'my-files-agent-shell-buffer buffer
+       'my-files-agent-shell-conversation-key key
+       'my-files-agent-shell-conversation-title title
+       'my-files-agent-shell-section my-files-agent-shell--rendering-section
+       'my-files-agent-shell-action 'open
+       'follow-link t
+       'help-echo (format "%s\nOpen this live conversation" title)
+       'face 'default)
+      (my-files-agent-shell--add-status-properties start status-label key))
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
@@ -1222,7 +1563,8 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
     (unless (window-live-p my-files-agent-shell--main-window)
       (user-error "The My Files main window is no longer available"))
     (set-window-buffer my-files-agent-shell--main-window buffer)
-    (select-window my-files-agent-shell--main-window)))
+    (select-window my-files-agent-shell--main-window)
+    (my-files-agent-shell--update-chat-row-indicators)))
 
 (defun my-files-agent-shell--insert-codex-chat-button (thread)
   "Insert a workflow-controlled row for Codex THREAD."
@@ -1232,18 +1574,21 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
          (status-label (if (string= status "active")
                            "[codex:active]"
                          "[codex]")))
-    (insert " ")
-    (insert-text-button
-     (format "%s %s" status-label title)
-     'action #'my-files-agent-shell--open-codex-chat
-     'my-files-agent-shell-codex-entry thread
-     'my-files-agent-shell-conversation-key key
-     'my-files-agent-shell-conversation-title title
-     'my-files-agent-shell-section my-files-agent-shell--rendering-section
-     'my-files-agent-shell-action 'open
-     'follow-link t
-     'help-echo (format "%s\nResume this Codex task in Agent Shell" title)
-     'face 'default)
+    (my-files-agent-shell--insert-conversation-prefix
+     key nil (alist-get 'id thread))
+    (let ((start (point)))
+      (insert-text-button
+       (format "%s %s" status-label title)
+       'action #'my-files-agent-shell--open-codex-chat
+       'my-files-agent-shell-codex-entry thread
+       'my-files-agent-shell-conversation-key key
+       'my-files-agent-shell-conversation-title title
+       'my-files-agent-shell-section my-files-agent-shell--rendering-section
+       'my-files-agent-shell-action 'open
+       'follow-link t
+       'help-echo (format "%s\nResume this Codex task in Agent Shell" title)
+       'face 'default)
+      (my-files-agent-shell--add-status-properties start status-label key))
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
@@ -1274,64 +1619,112 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
                            current-label)))
     (car (rassoc selected my-files-agent-shell--workflow-stages))))
 
+(defun my-files-agent-shell--move-conversations (keys)
+  "Prompt once and persist a workflow stage for conversation KEYS."
+  (let* ((current
+          (my-files-agent-shell--conversation-stage (car keys)))
+         (stage (my-files-agent-shell--read-workflow-stage current))
+         (changed
+          (seq-filter
+           (lambda (key)
+             (not (eq (my-files-agent-shell--conversation-stage key)
+                      stage)))
+           keys)))
+    (when changed
+      (my-files-agent-shell--prepare-selection-before-removal
+       changed (list 'active 'archived stage))
+      (dolist (key changed)
+        (my-files-agent-shell--set-conversation-stage key stage))
+      (my-files-agent-shell--clear-marks keys)
+      (my-files-agent-shell--schedule-refresh)
+      (message "Moved %s to %s"
+               (if (= (length changed) 1)
+                   "conversation"
+                 (format "%d conversations" (length changed)))
+               (my-files-agent-shell--workflow-stage-label stage)))))
+
 (defun my-files-agent-shell--move-conversation (key)
   "Prompt for and persist conversation KEY's workflow stage."
-  (let* ((current (my-files-agent-shell--conversation-stage key))
-         (stage (my-files-agent-shell--read-workflow-stage current)))
-    (unless (eq current stage)
-      (my-files-agent-shell--set-conversation-stage key stage)
-      (my-files-agent-shell--schedule-refresh)
-      (message "Moved conversation to %s"
-               (my-files-agent-shell--workflow-stage-label stage)))))
+  (my-files-agent-shell--move-conversations (list key)))
 
 (defun my-files-agent-shell--move-conversation-button (button)
   "Move the conversation represented by BUTTON to a workflow stage."
+  (goto-char (button-start button))
   (my-files-agent-shell--move-conversation
    (button-get button 'my-files-agent-shell-conversation-key)))
 
 (defun my-files-agent-shell-move-at-point ()
-  "Move the highlighted conversation to a user-selected workflow stage."
+  "Move marked conversations, or the highlighted conversation, to a stage."
   (interactive)
-  (my-files-agent-shell--move-conversation
-   (my-files-agent-shell--conversation-key-at-point)))
+  (my-files-agent-shell--move-conversations
+   (my-files-agent-shell--conversation-keys-for-action)))
+
+(defun my-files-agent-shell--archive-conversations (keys)
+  "Archive non-archived conversation KEYS after one confirmation."
+  (let ((active
+         (seq-remove
+          #'my-files-agent-shell--conversation-archived-p keys)))
+    (unless active
+      (user-error "The selected conversations are already archived"))
+    (when (yes-or-no-p
+           (if (= (length active) 1)
+               "Archive this conversation? "
+             (format "Archive %d conversations? " (length active))))
+      (my-files-agent-shell--prepare-selection-before-removal
+       active '(archived))
+      (dolist (key active)
+        (my-files-agent-shell--set-conversation-archived key t))
+      (my-files-agent-shell--clear-marks keys)
+      (my-files-agent-shell--schedule-refresh)
+      (message "Archived %s"
+               (if (= (length active) 1)
+                   "conversation"
+                 (format "%d conversations" (length active)))))))
 
 (defun my-files-agent-shell-archive-at-point ()
-  "Show the highlighted conversation only under Archived."
+  "Archive marked conversations, or the highlighted conversation."
   (interactive)
-  (let ((key (my-files-agent-shell--conversation-key-at-point)))
-    (when (my-files-agent-shell--conversation-archived-p key)
-      (user-error "That conversation is already archived"))
-    (when (yes-or-no-p "Archive this conversation? ")
-      (my-files-agent-shell--set-conversation-archived key t)
-      (my-files-agent-shell--schedule-refresh)
-      (message "Archived conversation"))))
+  (my-files-agent-shell--archive-conversations
+   (my-files-agent-shell--conversation-keys-for-action)))
 
 (defun my-files-agent-shell--archive-conversation-button (button)
   "Archive the conversation represented by BUTTON."
-  (let ((key (button-get button 'my-files-agent-shell-conversation-key)))
-    (when (yes-or-no-p "Archive this conversation? ")
-      (my-files-agent-shell--set-conversation-archived key t)
-      (my-files-agent-shell--schedule-refresh)
-      (message "Archived conversation"))))
+  (goto-char (button-start button))
+  (my-files-agent-shell--archive-conversations
+   (list (button-get button 'my-files-agent-shell-conversation-key))))
+
+(defun my-files-agent-shell--restore-conversations (keys)
+  "Restore archived conversation KEYS."
+  (let ((archived
+         (seq-filter
+          #'my-files-agent-shell--conversation-archived-p keys)))
+    (unless archived
+      (user-error "The selected conversations are not archived"))
+    (my-files-agent-shell--prepare-selection-before-removal archived nil)
+    (dolist (key archived)
+      (my-files-agent-shell--set-conversation-archived key nil))
+    (my-files-agent-shell--clear-marks keys)
+    (my-files-agent-shell--schedule-refresh)
+    (message "Restored %s"
+             (if (= (length archived) 1)
+                 "conversation"
+               (format "%d conversations" (length archived))))))
 
 (defun my-files-agent-shell--restore-conversation (key)
   "Restore archived conversation KEY to the active lists."
-  (unless (my-files-agent-shell--conversation-archived-p key)
-    (user-error "That conversation is not archived"))
-  (my-files-agent-shell--set-conversation-archived key nil)
-  (my-files-agent-shell--schedule-refresh)
-  (message "Restored conversation"))
+  (my-files-agent-shell--restore-conversations (list key)))
 
 (defun my-files-agent-shell--restore-conversation-button (button)
   "Restore the archived conversation represented by BUTTON."
+  (goto-char (button-start button))
   (my-files-agent-shell--restore-conversation
    (button-get button 'my-files-agent-shell-conversation-key)))
 
 (defun my-files-agent-shell-restore-at-point ()
-  "Restore the highlighted archived conversation."
+  "Restore marked conversations, or the highlighted conversation."
   (interactive)
-  (my-files-agent-shell--restore-conversation
-   (my-files-agent-shell--conversation-key-at-point)))
+  (my-files-agent-shell--restore-conversations
+   (my-files-agent-shell--conversation-keys-for-action)))
 
 (defun my-files-agent-shell--agent-config (agent-name)
   "Return the installed agent-shell config matching AGENT-NAME."
@@ -1436,15 +1829,19 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
              (my-files-agent-shell--path-name project))))
 
 (defun my-files-agent-shell--subscribe-chat (buffer)
-  "Refresh the browser when BUFFER changes lifecycle state or is killed."
+  "Track BUFFER status in place and refresh when its row structure changes."
   (with-current-buffer buffer
     (dolist (event my-files-agent-shell--chat-refresh-events)
       (unless (memq event my-files-agent-shell--subscribed-events)
         (agent-shell-subscribe-to
          :shell-buffer buffer
          :event event
-         :on-event (lambda (_event)
-                     (my-files-agent-shell--schedule-refresh)))
+         :on-event
+         (if (memq event my-files-agent-shell--chat-status-events)
+             (lambda (_event)
+               (my-files-agent-shell--update-live-chat-status buffer))
+           (lambda (_event)
+             (my-files-agent-shell--schedule-refresh))))
         (push event my-files-agent-shell--subscribed-events)))
     (add-hook 'kill-buffer-hook
               #'my-files-agent-shell--schedule-refresh nil t)))
@@ -1510,20 +1907,24 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
         (full-title (or (plist-get entry :full-title)
                         (plist-get entry :title)))
         (agent (or (plist-get entry :agent) "Agent"))
-        (started (plist-get entry :started)))
-    (insert " ")
-    (insert-text-button
-     (format "%-8s %s" "[saved]" title)
-     'action #'my-files-agent-shell--resume-chat
-     'my-files-agent-shell-entry entry
-     'my-files-agent-shell-conversation-key key
-     'my-files-agent-shell-conversation-title full-title
-     'my-files-agent-shell-section my-files-agent-shell--rendering-section
-     'follow-link t
-     'help-echo (format "%s\nResume %s session%s"
-                        full-title agent
-                        (if started (format " from %s" started) ""))
-     'face 'default)
+        (started (plist-get entry :started))
+        (status-label "[saved]"))
+    (my-files-agent-shell--insert-conversation-prefix
+     key nil (plist-get entry :session-id))
+    (let ((start (point)))
+      (insert-text-button
+       (format "%-8s %s" status-label title)
+       'action #'my-files-agent-shell--resume-chat
+       'my-files-agent-shell-entry entry
+       'my-files-agent-shell-conversation-key key
+       'my-files-agent-shell-conversation-title full-title
+       'my-files-agent-shell-section my-files-agent-shell--rendering-section
+       'follow-link t
+       'help-echo (format "%s\nResume %s session%s"
+                          full-title agent
+                          (if started (format " from %s" started) ""))
+       'face 'default)
+      (my-files-agent-shell--add-status-properties start status-label key))
     (my-files-agent-shell--insert-conversation-actions key)
     (insert "\n")))
 
@@ -1648,8 +2049,20 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
       (my-files-agent-shell--panel-buffer
        my-files-agent-shell--chat-buffer-name
        #'my-files-agent-shell-chat-mode)
-    (let ((selection-key (my-files-agent-shell--selected-button-key))
-          (inhibit-read-only t))
+    (let* ((selection-key
+            (or my-files-agent-shell--pending-selection-key
+                (my-files-agent-shell--selected-button-key)))
+           (my-files-agent-shell--rendering-live-buffers
+            (agent-shell-buffers))
+           (main-buffer
+            (and (window-live-p my-files-agent-shell--main-window)
+                 (window-buffer my-files-agent-shell--main-window)))
+           (my-files-agent-shell--rendering-main-chat
+            (and (memq main-buffer
+                       my-files-agent-shell--rendering-live-buffers)
+                 main-buffer))
+           (inhibit-read-only t))
+      (setq my-files-agent-shell--pending-selection-key nil)
       (erase-buffer)
       (my-files-agent-shell--insert-heading "AGENT CHATS")
       (if (or my-files-agent-shell--selected-project
@@ -1677,7 +2090,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                    'face 'font-lock-keyword-face)
                   (insert "\n"))))
             (my-files-agent-shell--insert-empty
-             "m moves stage · a archives · u restores")
+             (concat "SPC marks · U clears · m moves · a archives · "
+                     "u restores · ▶ current · ● open buffer"))
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
@@ -1768,6 +2182,11 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
              buffers my-files-agent-shell--known-chat-buffers)
       (setq my-files-agent-shell--known-chat-buffers buffers)
       (my-files-agent-shell--schedule-refresh))))
+
+(defun my-files-agent-shell--window-buffer-changed (&optional _frame)
+  "Update row indicators after a browser window changes buffers."
+  (when (my-files-agent-shell--visible-p)
+    (my-files-agent-shell--update-chat-row-indicators)))
 
 (defun my-files-agent-shell--schedule-refresh (&rest _ignored)
   "Schedule a browser refresh after current buffer activity settles."
@@ -1975,6 +2394,8 @@ their requested space before the Conversations panel uses the remainder."
                       #'my-files-agent-shell--buffer-list-updated)
             (add-hook 'window-selection-change-functions
                       #'my-files-agent-shell--update-panel-focus-faces)
+            (add-hook 'window-buffer-change-functions
+                      #'my-files-agent-shell--window-buffer-changed)
             (my-files-agent-shell-refresh)
             (my-files-agent-shell--start-codex-refresh-timer)
             (my-files-agent-shell-focus-areas))
@@ -1983,6 +2404,8 @@ their requested space before the Conversations panel uses the remainder."
                       #'my-files-agent-shell--buffer-list-updated)
          (remove-hook 'window-selection-change-functions
                       #'my-files-agent-shell--update-panel-focus-faces)
+         (remove-hook 'window-buffer-change-functions
+                      #'my-files-agent-shell--window-buffer-changed)
          (set-window-configuration configuration)
          (setq my-files-agent-shell--saved-window-configuration nil
                my-files-agent-shell--area-window nil
@@ -2000,6 +2423,8 @@ their requested space before the Conversations panel uses the remainder."
                #'my-files-agent-shell--buffer-list-updated)
   (remove-hook 'window-selection-change-functions
                #'my-files-agent-shell--update-panel-focus-faces)
+  (remove-hook 'window-buffer-change-functions
+               #'my-files-agent-shell--window-buffer-changed)
   (when (timerp my-files-agent-shell--refresh-timer)
     (cancel-timer my-files-agent-shell--refresh-timer))
   (when (timerp my-files-agent-shell--codex-refresh-timer)
