@@ -398,19 +398,51 @@ of the conversation to confirm that the correct session was restored."
   (when identifier
     (format "%s:%s" kind identifier)))
 
+(defun my-files-agent-shell--known-codex-session-p (session-id)
+  "Return non-nil when SESSION-ID belongs to a cached Codex task."
+  (and session-id
+       (seq-some
+        (lambda (thread)
+          (equal (alist-get 'id thread) session-id))
+        my-files-agent-shell--codex-threads)))
+
+(defun my-files-agent-shell--session-conversation-key
+    (session-id &optional codex-session)
+  "Return the canonical conversation key for SESSION-ID.
+
+CODEX-SESSION is non-nil when the caller knows the ID came from Codex.  A
+persisted Agent Shell key takes precedence for compatibility with workflow
+changes made before live and cached representations were coalesced."
+  (when session-id
+    (my-files-agent-shell--load-conversation-states)
+    (let ((agent-key
+           (my-files-agent-shell--conversation-key 'agent session-id))
+          (codex-key
+           (my-files-agent-shell--conversation-key 'codex session-id)))
+      (cond
+       ((gethash agent-key my-files-agent-shell--conversation-states)
+        agent-key)
+       ((gethash codex-key my-files-agent-shell--conversation-states)
+        codex-key)
+       ((or codex-session
+            (my-files-agent-shell--known-codex-session-p session-id))
+        codex-key)
+       (agent-key)))))
+
 (defun my-files-agent-shell--live-conversation-key (buffer)
   "Return the stable conversation key for live Agent Shell BUFFER."
-  (my-files-agent-shell--conversation-key
-   'agent (my-files-agent-shell--live-session-id buffer)))
+  (my-files-agent-shell--session-conversation-key
+   (my-files-agent-shell--live-session-id buffer)))
 
 (defun my-files-agent-shell--saved-conversation-key (entry)
   "Return the stable conversation key for saved transcript ENTRY."
-  (my-files-agent-shell--conversation-key
-   'agent (plist-get entry :session-id)))
+  (my-files-agent-shell--session-conversation-key
+   (plist-get entry :session-id)))
 
 (defun my-files-agent-shell--codex-conversation-key (thread)
   "Return the stable conversation key for Codex THREAD."
-  (my-files-agent-shell--conversation-key 'codex (alist-get 'id thread)))
+  (my-files-agent-shell--session-conversation-key
+   (alist-get 'id thread) t))
 
 (defvar-keymap my-files-agent-shell-mode-map
   :doc "Keymap shared by My Files browser panels."
@@ -1990,27 +2022,46 @@ All other text properties at POSITION are preserved."
 
 (defun my-files-agent-shell--conversation-records
     (chats saved-chats codex-threads)
-  "Return normalized records for CHATS, SAVED-CHATS, and CODEX-THREADS."
-  (append
-   (mapcar
-    (lambda (chat)
-      (my-files-agent-shell--subscribe-chat chat)
-      (list :kind 'live
-            :value chat
-            :key (my-files-agent-shell--live-conversation-key chat)))
-    chats)
-   (mapcar
-    (lambda (entry)
-      (list :kind 'saved
-            :value entry
-            :key (my-files-agent-shell--saved-conversation-key entry)))
-    saved-chats)
-   (mapcar
-    (lambda (thread)
-      (list :kind 'codex
-            :value thread
-            :key (my-files-agent-shell--codex-conversation-key thread)))
-    codex-threads)))
+  "Return one normalized record per conversation in the supplied sources.
+
+When a session occurs in multiple sources, prefer a live buffer, then a cached
+Codex task, then a saved transcript."
+  (let ((records
+         (append
+          (mapcar
+           (lambda (chat)
+             (my-files-agent-shell--subscribe-chat chat)
+             (list :kind 'live
+                   :value chat
+                   :session-id
+                   (my-files-agent-shell--live-session-id chat)
+                   :key
+                   (my-files-agent-shell--live-conversation-key chat)))
+           chats)
+          (mapcar
+           (lambda (thread)
+             (list :kind 'codex
+                   :value thread
+                   :session-id (alist-get 'id thread)
+                   :key
+                   (my-files-agent-shell--codex-conversation-key thread)))
+           codex-threads)
+          (mapcar
+           (lambda (entry)
+             (list :kind 'saved
+                   :value entry
+                   :session-id (plist-get entry :session-id)
+                   :key
+                   (my-files-agent-shell--saved-conversation-key entry)))
+           saved-chats)))
+        (seen-session-ids (make-hash-table :test #'equal)))
+    (seq-filter
+     (lambda (record)
+       (let ((session-id (plist-get record :session-id)))
+         (or (null session-id)
+             (unless (gethash session-id seen-session-ids)
+               (puthash session-id t seen-session-ids)))))
+     records)))
 
 (defun my-files-agent-shell--records-for-section (section records)
   "Return RECORDS belonging to conversation SECTION."

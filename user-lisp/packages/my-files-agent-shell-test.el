@@ -344,6 +344,69 @@
             (should (string-match-p "Fix activity import and sign-in" text))
             (should-not (string-match-p "Unrelated task" text))))))))
 
+(ert-deftest my-files-agent-shell-coalesces-codex-task-with-live-session ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let* ((thread
+            `((id . "shared-session")
+              (cwd . ,default-directory)
+              (name . "Shared conversation")
+              (status . ((type . "notLoaded")))))
+           (chat (generate-new-buffer " shared conversation"))
+           (my-files-agent-shell--codex-threads (list thread)))
+      (unwind-protect
+          (progn
+            (my-files-agent-shell--set-conversation-stage
+             "codex:shared-session" 'review)
+            (my-files-agent-shell--render-chat-lists nil nil (list thread))
+            (my-files-agent-shell-test--set-session-id chat "shared-session")
+            (cl-letf (((symbol-function 'agent-shell-buffers)
+                       (lambda () (list chat)))
+                      ((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       (lambda (_buffer) "Shared conversation"))
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore))
+              (my-files-agent-shell--render-chat-lists
+               (list chat) nil (list thread)))
+            (with-current-buffer my-files-agent-shell--chat-buffer-name
+              (let ((button (next-button (point-min)))
+                    rows)
+                (while button
+                  (when (or
+                         (eq (button-get button
+                                         'my-files-agent-shell-buffer)
+                             chat)
+                         (equal
+                          (alist-get
+                           'id
+                           (button-get
+                            button 'my-files-agent-shell-codex-entry))
+                          "shared-session"))
+                    (push button rows))
+                  (setq button (next-button (button-end button))))
+                (should (= (length rows) 2))
+                (should
+                 (equal
+                  (sort
+                   (mapcar
+                    (lambda (row)
+                      (button-get row 'my-files-agent-shell-section))
+                    rows)
+                   (lambda (left right)
+                     (string< (symbol-name left) (symbol-name right))))
+                  '(active review)))
+                (dolist (row rows)
+                  (should (eq (button-get row
+                                          'my-files-agent-shell-buffer)
+                              chat))
+                  (should (string-prefix-p "[ready] "
+                                           (button-label row)))))))
+        (kill-buffer chat)))))
+
 (ert-deftest my-files-agent-shell-archives-codex-task-from-the-pane ()
   (my-files-agent-shell-test--with-state
       ((my-files-agent-shell--selected-project "/tmp/project")
@@ -1294,11 +1357,7 @@
                         (open-button
                          (my-files-agent-shell-test--button-with-property
                           'my-files-agent-shell-conversation-key
-                          "agent:open"))
-                        (codex-button
-                         (my-files-agent-shell-test--button-with-property
-                          'my-files-agent-shell-conversation-key
-                          "codex:open")))
+                          "agent:open")))
                     (should (string-match-p
                              "▶"
                              (my-files-agent-shell-test--button-prefix
@@ -1306,11 +1365,7 @@
                     (should (string-match-p
                              "●"
                              (my-files-agent-shell-test--button-prefix
-                              open-button)))
-                    (should (string-match-p
-                             "●"
-                             (my-files-agent-shell-test--button-prefix
-                              codex-button)))))
+                              open-button)))))
                 (set-window-buffer my-files-agent-shell--main-window open)
                 (my-files-agent-shell--update-chat-row-indicators)
                 (with-current-buffer my-files-agent-shell--chat-buffer-name
