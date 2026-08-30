@@ -94,6 +94,118 @@
                (my-files-agent-shell--discover-projects area))
               '("Client One" "Group/Client Two"))))))
 
+(ert-deftest my-files-agent-shell-filters-navigation-to-in-progress-chats ()
+  (my-files-agent-shell-test--with-tree
+      ((my-files-agent-shell--in-progress-only nil)
+       (my-files-agent-shell--selected-area nil)
+       (my-files-agent-shell--selected-project nil)
+       (my-files-agent-shell--codex-threads nil))
+    (let* ((work (expand-file-name "Work" root))
+           (personal (expand-file-name "Personal" root))
+           (empty (expand-file-name "Empty" root))
+           (active (expand-file-name "Active" work))
+           (review (expand-file-name "Review" work))
+           (archived (expand-file-name "Archived" work))
+           (codex-project (expand-file-name "Codex" personal))
+           (review-transcript
+            (expand-file-name ".agent-shell/transcripts/review.md" review))
+           (archived-transcript
+            (expand-file-name ".agent-shell/transcripts/archived.md"
+                              archived))
+           (live-chat (generate-new-buffer " in-progress filter chat"))
+           (codex-thread
+            `((id . "codex-in-progress")
+              (cwd . ,codex-project)
+              (name . "Codex in progress")
+              (status . ((type . "notLoaded"))))))
+      (unwind-protect
+          (progn
+            (dolist (area (list work personal empty))
+              (make-directory area t)
+              (write-region "" nil
+                            (expand-file-name ".area.toml" area)
+                            nil 'silent))
+            (dolist (project (list active review archived codex-project))
+              (make-directory project t)
+              (write-region "" nil
+                            (expand-file-name ".project.toml" project)
+                            nil 'silent))
+            (dolist (spec `((,review-transcript . "review-session")
+                            (,archived-transcript . "archived-session")))
+              (make-directory (file-name-directory (car spec)) t)
+              (write-region
+               (concat "# Agent Shell Transcript\n\n"
+                       "**Agent:** Codex\n"
+                       "**Session ID:** " (cdr spec) "\n\n---\n\n"
+                       "## User\n\nFilter this conversation.\n")
+               nil (car spec) nil 'silent))
+            (my-files-agent-shell-test--set-session-id
+             live-chat "live-in-progress")
+            (with-current-buffer live-chat
+              (setq default-directory (file-name-as-directory active)))
+            (my-files-agent-shell--set-conversation-stage
+             "agent:review-session" 'review)
+            (my-files-agent-shell--set-conversation-archived
+             "agent:archived-session" t)
+            (setq my-files-agent-shell--selected-area
+                  (my-files-agent-shell--canonical-directory work)
+                  my-files-agent-shell--selected-project
+                  (my-files-agent-shell--canonical-directory review)
+                  my-files-agent-shell--codex-threads (list codex-thread))
+            (cl-letf (((symbol-function 'agent-shell-buffers)
+                       (lambda () (list live-chat)))
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore)
+                      ((symbol-function
+                        'my-files-agent-shell--refresh-codex-threads)
+                       #'ignore))
+              (my-files-agent-shell-toggle-in-progress-filter)
+              (should my-files-agent-shell--in-progress-only)
+              (should-not my-files-agent-shell--selected-project)
+              (with-current-buffer my-files-agent-shell--area-buffer-name
+                (should
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory work)))
+                (should
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory personal)))
+                (should-not
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory empty)))
+                (should (string-match-p "IN PROGRESS ONLY"
+                                        (buffer-string))))
+              (with-current-buffer my-files-agent-shell--project-buffer-name
+                (should
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory active)))
+                (should-not
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory review)))
+                (should-not
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory archived))))
+              (my-files-agent-shell-toggle-in-progress-filter)
+              (should-not my-files-agent-shell--in-progress-only)
+              (with-current-buffer my-files-agent-shell--area-buffer-name
+                (should
+                 (my-files-agent-shell-test--button-with-property
+                  'my-files-agent-shell-path
+                  (my-files-agent-shell--canonical-directory empty))))
+              (with-current-buffer my-files-agent-shell--project-buffer-name
+                (dolist (project (list active review archived))
+                  (should
+                   (my-files-agent-shell-test--button-with-property
+                    'my-files-agent-shell-path
+                    (my-files-agent-shell--canonical-directory project)))))))
+        (kill-buffer live-chat)))))
+
 (ert-deftest my-files-agent-shell-filters-chats-by-selected-project ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((project (expand-file-name "Work/Project" root))
@@ -590,6 +702,7 @@
                      ("C-f" . my-files-agent-shell-next-panel)
                      ("C-b" . my-files-agent-shell-previous-panel)
                      ("SPC" . my-files-agent-shell-toggle-mark-at-point)
+                     ("i" . my-files-agent-shell-toggle-in-progress-filter)
                      ("a" . my-files-agent-shell-archive-at-point)
                      ("m" . my-files-agent-shell-move-at-point)
                      ("u" . my-files-agent-shell-restore-at-point)

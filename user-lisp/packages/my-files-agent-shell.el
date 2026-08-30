@@ -22,6 +22,8 @@
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
+;; Pressing i limits the Areas and Projects panels to scopes that contain an
+;; active conversation in the In Progress workflow stage.
 ;; A leading `▶' identifies the conversation in the main window, `●' marks
 ;; conversations with open buffers, and `*' marks conversations selected for a
 ;; batch workflow action.  Space toggles a mark and U clears all marks.
@@ -171,6 +173,7 @@ of the conversation to confirm that the correct session was restored."
 (defvar my-files-agent-shell--codex-error nil)
 (defvar my-files-agent-shell--codex-last-refresh-time nil)
 (defvar my-files-agent-shell--known-chat-buffers nil)
+(defvar my-files-agent-shell--in-progress-only nil)
 (defvar my-files-agent-shell--conversation-states
   (make-hash-table :test #'equal))
 (defvar my-files-agent-shell--conversation-states-loaded nil)
@@ -428,6 +431,7 @@ of the conversation to confirm that the correct session was restored."
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
   "SPC" #'my-files-agent-shell-toggle-mark-at-point
+  "i" #'my-files-agent-shell-toggle-in-progress-filter
   "a" #'my-files-agent-shell-archive-at-point
   "m" #'my-files-agent-shell-move-at-point
   "u" #'my-files-agent-shell-restore-at-point
@@ -721,6 +725,17 @@ of the conversation to confirm that the correct session was restored."
     ((eq (selected-window) my-files-agent-shell--project-window)
      my-files-agent-shell--area-window)
     (t my-files-agent-shell--main-window))))
+
+(defun my-files-agent-shell-toggle-in-progress-filter ()
+  "Toggle whether Areas and Projects show only scopes with In Progress chats."
+  (interactive)
+  (setq my-files-agent-shell--in-progress-only
+        (not my-files-agent-shell--in-progress-only))
+  (my-files-agent-shell-refresh)
+  (message "%s projects and areas with In Progress chats"
+           (if my-files-agent-shell--in-progress-only
+               "Showing only"
+             "Showing all")))
 
 (defun my-files-agent-shell--canonical-directory (directory)
   "Return DIRECTORY as a canonical directory name."
@@ -1211,6 +1226,45 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
 (defun my-files-agent-shell--conversation-archived-p (key)
   "Return non-nil when conversation KEY is archived."
   (plist-get (my-files-agent-shell--conversation-state key) :archived))
+
+(defun my-files-agent-shell--conversation-in-progress-p (key)
+  "Return non-nil when conversation KEY is active and In Progress."
+  (and (not (my-files-agent-shell--conversation-archived-p key))
+       (eq (my-files-agent-shell--conversation-stage key) 'in-progress)))
+
+(defun my-files-agent-shell--scope-has-in-progress-chat-p
+    (scope live-buffers saved-chats codex-threads)
+  "Return non-nil when SCOPE contains an In Progress conversation.
+
+LIVE-BUFFERS, SAVED-CHATS, and CODEX-THREADS are complete browser data sets;
+the persisted workflow and archive state remains authoritative."
+  (or
+   (seq-some
+    (lambda (buffer)
+      (my-files-agent-shell--conversation-in-progress-p
+       (my-files-agent-shell--live-conversation-key buffer)))
+    (my-files-agent-shell--scope-chat-buffers scope live-buffers))
+   (seq-some
+    (lambda (entry)
+      (when-let* ((directory (plist-get entry :project)))
+        (and (my-files-agent-shell--directory-in-scope-p directory scope)
+             (my-files-agent-shell--conversation-in-progress-p
+              (my-files-agent-shell--saved-conversation-key entry)))))
+    saved-chats)
+   (seq-some
+    (lambda (thread)
+      (my-files-agent-shell--conversation-in-progress-p
+       (my-files-agent-shell--codex-conversation-key thread)))
+    (my-files-agent-shell--scope-codex-threads scope codex-threads))))
+
+(defun my-files-agent-shell--scopes-with-in-progress-chats
+    (scopes live-buffers saved-chats codex-threads)
+  "Filter SCOPES to those containing an In Progress conversation."
+  (seq-filter
+   (lambda (scope)
+     (my-files-agent-shell--scope-has-in-progress-chat-p
+      scope live-buffers saved-chats codex-threads))
+   scopes))
 
 (defun my-files-agent-shell--buffer-with-session-id (session-id buffers)
   "Return the member of BUFFERS whose session ID is SESSION-ID."
@@ -1856,7 +1910,10 @@ All other text properties at POSITION are preserved."
           (inhibit-read-only t))
       (erase-buffer)
       (setq my-files-agent-shell--selected-path-button nil)
-      (my-files-agent-shell--insert-heading "AREAS")
+      (my-files-agent-shell--insert-heading
+       (if my-files-agent-shell--in-progress-only
+           "AREAS · IN PROGRESS ONLY"
+         "AREAS"))
       (if areas
           (dolist (area areas)
             (my-files-agent-shell--insert-path-button
@@ -1877,7 +1934,10 @@ All other text properties at POSITION are preserved."
           (inhibit-read-only t))
       (erase-buffer)
       (setq my-files-agent-shell--selected-path-button nil)
-      (my-files-agent-shell--insert-heading "PROJECTS")
+      (my-files-agent-shell--insert-heading
+       (if my-files-agent-shell--in-progress-only
+           "PROJECTS · IN PROGRESS ONLY"
+         "PROJECTS"))
       (if my-files-agent-shell--selected-area
           (progn
             (my-files-agent-shell--insert-path-button
@@ -2091,7 +2151,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                   (insert "\n"))))
             (my-files-agent-shell--insert-empty
              (concat "SPC marks · U clears · m moves · a archives · "
-                     "u restores · ▶ current · ● open buffer"))
+                     "u restores · i filters · ▶ current · ● open buffer"))
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
@@ -2119,7 +2179,36 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
   "Rescan projects, agent-shell chats, and cached Codex tasks."
   (interactive)
   (let* ((force-codex-refresh (called-interactively-p 'interactive))
-         (areas (my-files-agent-shell--discover-areas))
+         (all-areas (my-files-agent-shell--discover-areas))
+         (all-chat-buffers (agent-shell-buffers))
+         (live-session-ids
+          (delq nil
+                (mapcar #'my-files-agent-shell--live-session-id
+                        all-chat-buffers)))
+         (area-projects
+          (and my-files-agent-shell--in-progress-only
+               (mapcar
+                (lambda (area)
+                  (cons area (my-files-agent-shell--discover-projects area)))
+                all-areas)))
+         (all-filter-directories
+          (and my-files-agent-shell--in-progress-only
+               (delete-dups
+                (append
+                 all-areas
+                 (mapcan
+                  (lambda (entry) (copy-sequence (cdr entry)))
+                  area-projects)))))
+         (all-saved-chats
+          (and all-filter-directories
+               (my-files-agent-shell--discover-saved-chats-in-directories
+                all-filter-directories live-session-ids)))
+         (areas
+          (if my-files-agent-shell--in-progress-only
+              (my-files-agent-shell--scopes-with-in-progress-chats
+               all-areas all-chat-buffers all-saved-chats
+               my-files-agent-shell--codex-threads)
+            all-areas))
          (selected-area
           (and my-files-agent-shell--selected-area
                (seq-find
@@ -2128,10 +2217,19 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                 areas))))
     (setq my-files-agent-shell--selected-area
           (or selected-area (car areas)))
-    (let* ((projects
+    (let* ((all-projects
             (and my-files-agent-shell--selected-area
-                 (my-files-agent-shell--discover-projects
-                  my-files-agent-shell--selected-area)))
+                 (if my-files-agent-shell--in-progress-only
+                     (alist-get my-files-agent-shell--selected-area
+                                area-projects nil nil #'equal)
+                   (my-files-agent-shell--discover-projects
+                    my-files-agent-shell--selected-area))))
+           (projects
+            (if my-files-agent-shell--in-progress-only
+                (my-files-agent-shell--scopes-with-in-progress-chats
+                 all-projects all-chat-buffers all-saved-chats
+                 my-files-agent-shell--codex-threads)
+              all-projects))
            (selected-project
             (and my-files-agent-shell--selected-project
                  (seq-find
@@ -2139,8 +2237,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                     (equal project my-files-agent-shell--selected-project))
                   projects))))
       (setq my-files-agent-shell--selected-project selected-project)
-      (let* ((all-chat-buffers (agent-shell-buffers))
-             (scope (or my-files-agent-shell--selected-project
+      (let* ((scope (or my-files-agent-shell--selected-project
                         my-files-agent-shell--selected-area))
              (chats
               (my-files-agent-shell--scope-chat-buffers
@@ -2151,11 +2248,22 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                 (and my-files-agent-shell--selected-area
                      (cons my-files-agent-shell--selected-area projects))))
              (saved-chats
-              (and saved-chat-directories
-                   (my-files-agent-shell--discover-saved-chats-in-directories
-                    saved-chat-directories
-                    (delq nil (mapcar #'my-files-agent-shell--live-session-id
-                                      chats)))))
+              (if my-files-agent-shell--in-progress-only
+                  (and scope
+                       (seq-filter
+                        (lambda (entry)
+                          (when-let* ((directory
+                                      (plist-get entry :project)))
+                            (my-files-agent-shell--directory-in-scope-p
+                             directory scope)))
+                        all-saved-chats))
+                (and saved-chat-directories
+                     (my-files-agent-shell--discover-saved-chats-in-directories
+                      saved-chat-directories
+                      (delq
+                       nil
+                       (mapcar #'my-files-agent-shell--live-session-id
+                               chats))))))
              (codex-threads
               (my-files-agent-shell--scope-codex-threads
                scope
