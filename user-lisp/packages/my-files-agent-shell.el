@@ -17,8 +17,8 @@
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel combines live `agent-shell'
 ;; buffers, their saved transcripts, and Codex tasks whose working directories
-;; belong to the selected project or area.  Every non-archived conversation
-;; appears in Active Conversations and in one user-assigned workflow stage:
+;; belong to the selected project or area.  Every non-archived, non-deleted
+;; conversation appears in Active Conversations and in one workflow stage:
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
@@ -26,7 +26,9 @@
 ;; active conversation in the In Progress workflow stage.
 ;; A leading `▶' identifies the conversation in the main window, `●' marks
 ;; conversations with open buffers, and `*' marks conversations selected for a
-;; batch workflow action.  Space toggles a mark and U clears all marks.
+;; batch workflow action.  Space toggles a mark and U clears all marks.  Delete
+;; hides archived conversations permanently from this browser without erasing
+;; their underlying Codex history or transcript.
 ;; Hovering displays the complete title as help text; keyboard highlighting
 ;; displays it in the echo area.
 
@@ -107,7 +109,7 @@ discovery quick."
 
 (defcustom my-files-agent-shell-state-file
   (locate-user-emacs-file "var/my-files-agent-shell-state.json")
-  "File that stores user-assigned conversation stages and archive state."
+  "File that stores conversation workflow, archive, and deletion state."
   :type 'file
   :group 'my-files-agent-shell)
 
@@ -222,8 +224,9 @@ of the conversation to confirm that the correct session was restored."
   "Agent-shell events observed by the conversation browser.")
 
 (declare-function agent-shell-buffers "agent-shell")
+(declare-function agent-shell--auto-preferred-config "agent-shell")
 (declare-function agent-shell-cwd "agent-shell-project")
-(declare-function agent-shell-resume-session "agent-shell")
+(declare-function agent-shell-select-config "agent-shell")
 (declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell-status "agent-shell")
 (declare-function agent-shell-subscribe-to "agent-shell")
@@ -236,6 +239,7 @@ of the conversation to confirm that the correct session was restored."
 (declare-function codex-ide-session-process "codex-ide-core")
 (declare-function codex-ide-session-status "codex-ide-core")
 (defvar agent-shell--state)
+(defvar agent-shell-cwd-function)
 (defvar agent-shell-session-restore-verbosity)
 (defvar codex-ide-cli-path)
 
@@ -277,21 +281,26 @@ of the conversation to confirm that the correct session was restored."
               (dolist (entry conversations)
                 (let ((key (alist-get 'key entry))
                       (stage-name (alist-get 'stage entry))
-                      (archived-value (alist-get 'archived entry)))
+                      (archived-value (alist-get 'archived entry))
+                      (deleted-value (alist-get 'deleted entry)))
                   (unless (and (stringp key)
                                (not (string-empty-p key))
                                (stringp stage-name)
-                               (memq archived-value '(:json-false t)))
+                               (memq archived-value '(:json-false t))
+                               (memq deleted-value '(nil :json-false t)))
                     (error "Invalid conversation state: %S" entry))
                   (when (gethash key seen)
                     (error "Duplicate conversation state: %s" key))
                   (let ((stage (intern-soft stage-name))
-                        (archived (eq archived-value t)))
+                        (archived (eq archived-value t))
+                        (deleted (eq deleted-value t)))
                     (unless (my-files-agent-shell--workflow-stage-p stage)
                       (error "Invalid workflow stage for %s: %S" key stage))
                     (puthash key t seen)
                     (puthash key
-                             (list :stage stage :archived archived)
+                             (list :stage stage
+                                   :archived archived
+                                   :deleted deleted)
                              my-files-agent-shell--conversation-states))))))
         (error
          (setq my-files-agent-shell--conversation-state-load-error
@@ -313,7 +322,10 @@ of the conversation to confirm that the correct session was restored."
                (stage . ,(symbol-name (plist-get state :stage)))
                (archived . ,(if (plist-get state :archived)
                                 t
-                              :json-false)))
+                              :json-false))
+               (deleted . ,(if (plist-get state :deleted)
+                               t
+                             :json-false)))
              conversations))
      my-files-agent-shell--conversation-states)
     `((version . 1)
@@ -356,7 +368,7 @@ of the conversation to confirm that the correct session was restored."
   "Return the persisted state for conversation KEY."
   (my-files-agent-shell--load-conversation-states)
   (or (and key (gethash key my-files-agent-shell--conversation-states))
-      '(:stage in-progress :archived nil)))
+      '(:stage in-progress :archived nil :deleted nil)))
 
 (defun my-files-agent-shell--store-conversation-state (key state)
   "Persist STATE for conversation KEY, rolling back on failure."
@@ -365,7 +377,8 @@ of the conversation to confirm that the correct session was restored."
   (let* ((missing (make-symbol "missing"))
          (previous (gethash key my-files-agent-shell--conversation-states
                             missing))
-         (default-state (equal state '(:stage in-progress :archived nil))))
+         (default-state
+          (equal state '(:stage in-progress :archived nil :deleted nil))))
     (if default-state
         (remhash key my-files-agent-shell--conversation-states)
       (puthash key state my-files-agent-shell--conversation-states))
@@ -392,6 +405,13 @@ of the conversation to confirm that the correct session was restored."
                 (my-files-agent-shell--conversation-state key))))
     (my-files-agent-shell--store-conversation-state
      key (plist-put state :archived (and archived t)))))
+
+(defun my-files-agent-shell--set-conversation-deleted (key deleted)
+  "Set conversation KEY's local tombstone state to DELETED."
+  (let ((state (copy-sequence
+                (my-files-agent-shell--conversation-state key))))
+    (my-files-agent-shell--store-conversation-state
+     key (plist-put state :deleted (and deleted t)))))
 
 (defun my-files-agent-shell--conversation-key (kind identifier)
   "Return a stable conversation key for KIND and IDENTIFIER."
@@ -465,6 +485,7 @@ changes made before live and cached representations were coalesced."
   "SPC" #'my-files-agent-shell-toggle-mark-at-point
   "i" #'my-files-agent-shell-toggle-in-progress-filter
   "a" #'my-files-agent-shell-archive-at-point
+  "d" #'my-files-agent-shell-delete-at-point
   "m" #'my-files-agent-shell-move-at-point
   "u" #'my-files-agent-shell-restore-at-point
   "U" #'my-files-agent-shell-unmark-all
@@ -901,6 +922,12 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
   (let ((status (alist-get 'type (alist-get 'status thread))))
     (if status (format "%s" status) "notLoaded")))
 
+(defun my-files-agent-shell--codex-thread-status-label (thread)
+  "Return a useful bracketed runtime status for Codex THREAD."
+  (if (string= (my-files-agent-shell--codex-thread-status thread) "active")
+      "[busy]"
+    "[closed]"))
+
 (defun my-files-agent-shell--codex-thread-title (thread)
   "Return a concise display title for Codex THREAD."
   (let ((title (or (alist-get 'name thread)
@@ -955,7 +982,8 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
         my-files-agent-shell--codex-last-refresh-time (float-time)
         my-files-agent-shell--codex-error
         (my-files-agent-shell--codex-error-text error-data))
-  (my-files-agent-shell--schedule-refresh))
+  (my-files-agent-shell--schedule-refresh)
+  (my-files-agent-shell--start-codex-refresh-timer))
 
 (defun my-files-agent-shell--codex-list-page (session cursor threads)
   "Fetch one Codex task page using SESSION after CURSOR and THREADS."
@@ -993,7 +1021,8 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
                    (my-files-agent-shell--update-codex-status-labels
                     all-threads)
                    (my-files-agent-shell--update-chat-row-indicators))
-               (my-files-agent-shell--schedule-refresh)))))))))
+               (my-files-agent-shell--schedule-refresh))
+             (my-files-agent-shell--start-codex-refresh-timer))))))))
 
 (defun my-files-agent-shell--codex-list-threads (session)
   "Refresh cached Codex tasks using initialized SESSION."
@@ -1259,9 +1288,14 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
   "Return non-nil when conversation KEY is archived."
   (plist-get (my-files-agent-shell--conversation-state key) :archived))
 
+(defun my-files-agent-shell--conversation-deleted-p (key)
+  "Return non-nil when conversation KEY is hidden by a local tombstone."
+  (plist-get (my-files-agent-shell--conversation-state key) :deleted))
+
 (defun my-files-agent-shell--conversation-in-progress-p (key)
   "Return non-nil when conversation KEY is active and In Progress."
-  (and (not (my-files-agent-shell--conversation-archived-p key))
+  (and (not (my-files-agent-shell--conversation-deleted-p key))
+       (not (my-files-agent-shell--conversation-archived-p key))
        (eq (my-files-agent-shell--conversation-stage key) 'in-progress)))
 
 (defun my-files-agent-shell--scope-has-in-progress-chat-p
@@ -1461,10 +1495,9 @@ All other text properties at POSITION are preserved."
 (defun my-files-agent-shell--update-codex-status-labels (threads)
   "Update only bracketed Codex status labels for THREADS."
   (dolist (thread threads)
-    (let ((status (my-files-agent-shell--codex-thread-status thread)))
-      (my-files-agent-shell--replace-status-labels
-       (my-files-agent-shell--codex-conversation-key thread)
-       (if (string= status "active") "[codex:active]" "[codex]")))))
+    (my-files-agent-shell--replace-status-labels
+     (my-files-agent-shell--codex-conversation-key thread)
+     (my-files-agent-shell--codex-thread-status-label thread))))
 
 (defun my-files-agent-shell--update-conversation-markers ()
   "Update batch-selection markers without rebuilding conversation rows."
@@ -1609,16 +1642,26 @@ All other text properties at POSITION are preserved."
        "Move" #'my-files-agent-shell--move-conversation-button key
        "Assign a workflow stage")
       (if archived
-          (my-files-agent-shell--insert-conversation-action
-           "Restore" #'my-files-agent-shell--restore-conversation-button key
-           "Return this conversation to Active Conversations")
+          (progn
+            (my-files-agent-shell--insert-conversation-action
+             "Restore" #'my-files-agent-shell--restore-conversation-button key
+             "Return this conversation to Active Conversations")
+            (my-files-agent-shell--insert-conversation-action
+             "Delete" #'my-files-agent-shell--delete-conversation-button key
+             "Permanently hide this archived conversation from the manager"))
         (my-files-agent-shell--insert-conversation-action
          "Archive" #'my-files-agent-shell--archive-conversation-button key
          "Show this conversation only under Archived")))))
 
 (defun my-files-agent-shell--insert-chat-button (buffer)
   "Insert a button that opens agent-shell BUFFER."
-  (let* ((title (my-files-agent-shell--chat-title buffer))
+  (let* ((session-id (my-files-agent-shell--live-session-id buffer))
+         (directory (buffer-local-value 'default-directory buffer))
+         (agent-config
+          (with-current-buffer buffer
+            (and (boundp 'agent-shell--state)
+                 (map-elt agent-shell--state :agent-config))))
+         (title (my-files-agent-shell--chat-title buffer))
          (key (my-files-agent-shell--live-conversation-key buffer))
          (status-label (concat "[" (my-files-agent-shell--chat-status buffer)
                                "]")))
@@ -1629,6 +1672,9 @@ All other text properties at POSITION are preserved."
        (format "%s %s" status-label title)
        'action #'my-files-agent-shell--open-chat
        'my-files-agent-shell-buffer buffer
+       'my-files-agent-shell-session-id session-id
+       'my-files-agent-shell-directory directory
+       'my-files-agent-shell-agent-config agent-config
        'my-files-agent-shell-conversation-key key
        'my-files-agent-shell-conversation-title title
        'my-files-agent-shell-section my-files-agent-shell--rendering-section
@@ -1654,17 +1700,25 @@ All other text properties at POSITION are preserved."
 
 (defun my-files-agent-shell--open-chat (button)
   "Open the Agent Shell buffer represented by BUTTON in the main window."
-  (my-files-agent-shell--display-chat-buffer
-   (button-get button 'my-files-agent-shell-buffer)))
+  (let ((buffer (button-get button 'my-files-agent-shell-buffer)))
+    (if (buffer-live-p buffer)
+        (my-files-agent-shell--display-chat-buffer buffer)
+      (let ((session-id
+             (button-get button 'my-files-agent-shell-session-id)))
+        (unless session-id
+          (my-files-agent-shell-refresh)
+          (user-error "That conversation is still starting and cannot resume"))
+        (my-files-agent-shell--start-resumed-chat
+         session-id nil
+         (button-get button 'my-files-agent-shell-directory)
+         (button-get button 'my-files-agent-shell-agent-config))))))
 
 (defun my-files-agent-shell--insert-codex-chat-button (thread)
   "Insert a workflow-controlled row for Codex THREAD."
   (let* ((title (my-files-agent-shell--codex-thread-title thread))
          (key (my-files-agent-shell--codex-conversation-key thread))
-         (status (my-files-agent-shell--codex-thread-status thread))
-         (status-label (if (string= status "active")
-                           "[codex:active]"
-                         "[codex]")))
+         (status-label
+          (my-files-agent-shell--codex-thread-status-label thread)))
     (my-files-agent-shell--insert-conversation-prefix
      key nil (alist-get 'id thread))
     (let ((start (point)))
@@ -1784,6 +1838,41 @@ All other text properties at POSITION are preserved."
   (my-files-agent-shell--archive-conversations
    (list (button-get button 'my-files-agent-shell-conversation-key))))
 
+(defun my-files-agent-shell--delete-conversations (keys)
+  "Permanently hide archived conversation KEYS from this manager."
+  (unless (seq-every-p
+           #'my-files-agent-shell--conversation-archived-p keys)
+    (user-error "Archive conversations before deleting them"))
+  (when (yes-or-no-p
+         (if (= (length keys) 1)
+             (concat "Delete this conversation from the manager? "
+                     "Its underlying history will remain intact. ")
+           (format
+            (concat "Delete %d conversations from the manager? "
+                    "Their underlying history will remain intact. ")
+            (length keys))))
+    (my-files-agent-shell--prepare-selection-before-removal keys nil)
+    (dolist (key keys)
+      (my-files-agent-shell--set-conversation-deleted key t))
+    (my-files-agent-shell--clear-marks keys)
+    (my-files-agent-shell--schedule-refresh)
+    (message "Deleted %s from the manager"
+             (if (= (length keys) 1)
+                 "conversation"
+               (format "%d conversations" (length keys))))))
+
+(defun my-files-agent-shell-delete-at-point ()
+  "Delete marked archived conversations, or the highlighted one."
+  (interactive)
+  (my-files-agent-shell--delete-conversations
+   (my-files-agent-shell--conversation-keys-for-action)))
+
+(defun my-files-agent-shell--delete-conversation-button (button)
+  "Delete the archived conversation represented by BUTTON from the manager."
+  (goto-char (button-start button))
+  (my-files-agent-shell--delete-conversations
+   (list (button-get button 'my-files-agent-shell-conversation-key))))
+
 (defun my-files-agent-shell--restore-conversations (keys)
   "Restore archived conversation KEYS."
   (let ((archived
@@ -1836,8 +1925,25 @@ All other text properties at POSITION are preserved."
      (concat "agent-shell requires shell-maker 0.97.2 or newer; "
              "upgrade shell-maker and restart Emacs"))))
 
+(defun my-files-agent-shell--agent-config-for-start
+    (&optional agent-name agent-config)
+  "Return AGENT-CONFIG, or resolve one using AGENT-NAME and user preferences."
+  (or agent-config
+      (and agent-name (my-files-agent-shell--agent-config agent-name))
+      (and (null agent-name) (agent-shell--auto-preferred-config))
+      (agent-shell-select-config
+       :prompt (if agent-name
+                   (format "Resume %s conversation with agent: " agent-name)
+                 "Start new agent: "))))
+
+(defun my-files-agent-shell--display-buffer-in-main-window (buffer _alist)
+  "Display BUFFER in the browser's main window for `display-buffer'."
+  (when (window-live-p my-files-agent-shell--main-window)
+    (set-window-buffer my-files-agent-shell--main-window buffer)
+    my-files-agent-shell--main-window))
+
 (defun my-files-agent-shell--start-resumed-chat
-    (session-id agent-name directory)
+    (session-id agent-name directory &optional agent-config)
   "Resume SESSION-ID for AGENT-NAME in DIRECTORY and show it in the main pane."
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
@@ -1851,24 +1957,31 @@ All other text properties at POSITION are preserved."
     (my-files-agent-shell--ensure-agent-shell-ready)
     (unless directory
       (user-error "That chat has no working directory"))
-    (let* ((config (my-files-agent-shell--agent-config agent-name))
+    (let* ((config
+            (my-files-agent-shell--agent-config-for-start
+             agent-name agent-config))
            (resume-directory
             (my-files-agent-shell--canonical-directory directory))
            (agent-shell-session-restore-verbosity
             my-files-agent-shell-session-restore-verbosity)
            (buffer
             (with-selected-window my-files-agent-shell--main-window
-              (let ((default-directory resume-directory))
-                (if config
-                    (agent-shell-start :config config :session-id session-id)
-                  (let ((agent-shell-preferred-agent-config nil))
-                    (agent-shell-resume-session session-id)))))))
+              (let ((default-directory resume-directory)
+                    (agent-shell-cwd-function
+                     (lambda () resume-directory))
+                    (agent-shell-session-strategy 'new)
+                    (display-buffer-overriding-action
+                     '(my-files-agent-shell--display-buffer-in-main-window)))
+                (agent-shell-start
+                 :config config :session-id session-id)))))
       ;; Agent startup completes asynchronously.  Keep the display policy
       ;; buffer-local so session/load callbacks see it after this call returns.
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (setq-local agent-shell-session-restore-verbosity
-                      my-files-agent-shell-session-restore-verbosity))
+                      my-files-agent-shell-session-restore-verbosity)
+          (setq-local agent-shell-cwd-function
+                      (lambda () resume-directory)))
         (my-files-agent-shell--display-chat-buffer buffer))
       (my-files-agent-shell--schedule-refresh)
       buffer)))
@@ -1892,14 +2005,20 @@ All other text properties at POSITION are preserved."
   (let* ((project
           (my-files-agent-shell--canonical-directory
            my-files-agent-shell--selected-project))
+         (config (my-files-agent-shell--agent-config-for-start))
          (buffer
           (with-selected-window my-files-agent-shell--main-window
             (let ((default-directory project)
-                  (agent-shell-session-strategy 'new))
-              (agent-shell '(4))))))
+                  (agent-shell-cwd-function (lambda () project))
+                  (agent-shell-session-strategy 'new)
+                  (display-buffer-overriding-action
+                   '(my-files-agent-shell--display-buffer-in-main-window)))
+              (agent-shell-start :config config)))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (setq-local my-files-agent-shell--assigned-project project))))
+        (setq-local my-files-agent-shell--assigned-project project)
+        (setq-local agent-shell-cwd-function (lambda () project)))
+      (my-files-agent-shell--display-chat-buffer buffer)))
   (my-files-agent-shell--schedule-refresh))
 
 (defun my-files-agent-shell--main-agent-chat-buffer ()
@@ -2079,13 +2198,15 @@ Codex task, then a saved transcript."
   (seq-filter
    (lambda (record)
      (let* ((key (plist-get record :key))
+            (deleted (my-files-agent-shell--conversation-deleted-p key))
             (archived (my-files-agent-shell--conversation-archived-p key)))
-       (pcase section
-         ('active (not archived))
-         ('archived archived)
-         (_ (and (not archived)
-                 (eq (my-files-agent-shell--conversation-stage key)
-                     section))))))
+       (unless deleted
+         (pcase section
+           ('active (not archived))
+           ('archived archived)
+           (_ (and (not archived)
+                   (eq (my-files-agent-shell--conversation-stage key)
+                       section)))))))
    records))
 
 (defun my-files-agent-shell--insert-conversation-record (record)
@@ -2213,7 +2334,8 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                   (insert "\n"))))
             (my-files-agent-shell--insert-empty
              (concat "SPC marks · U clears · m moves · a archives · "
-                     "u restores · i filters · ▶ current · ● open buffer"))
+                     "u restores · d deletes archived · i filters · "
+                     "▶ current · ● open buffer"))
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
@@ -2372,16 +2494,18 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                (my-files-agent-shell-refresh)))))))
 
 (defun my-files-agent-shell--start-codex-refresh-timer ()
-  "Start periodic Codex task refreshes for the visible browser."
+  "Schedule one Codex task refresh after Emacs becomes idle."
   (when (timerp my-files-agent-shell--codex-refresh-timer)
     (cancel-timer my-files-agent-shell--codex-refresh-timer))
-  (setq my-files-agent-shell--codex-refresh-timer
-        (run-at-time
-         my-files-agent-shell-codex-refresh-interval
-         my-files-agent-shell-codex-refresh-interval
-         (lambda ()
-           (when (my-files-agent-shell--visible-p)
-             (my-files-agent-shell--refresh-codex-threads t))))))
+  (setq my-files-agent-shell--codex-refresh-timer nil)
+  (when (my-files-agent-shell--visible-p)
+    (setq my-files-agent-shell--codex-refresh-timer
+          (run-with-idle-timer
+           my-files-agent-shell-codex-refresh-interval nil
+           (lambda ()
+             (setq my-files-agent-shell--codex-refresh-timer nil)
+             (when (my-files-agent-shell--visible-p)
+               (my-files-agent-shell--refresh-codex-threads t)))))))
 
 (defun my-files-agent-shell--visible-line-width ()
   "Return the display width of visible text on the current line."

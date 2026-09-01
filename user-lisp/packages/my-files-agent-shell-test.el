@@ -438,11 +438,41 @@
             (should (string-match-p "In Progress (0)" text))
             (should (string-match-p "Archived (1)" text))))))))
 
+(ert-deftest my-files-agent-shell-deletes-archived-task-from-manager ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project "/tmp/project"))
+    (let ((thread '((id . "thread-to-delete")
+                    (cwd . "/tmp/project")
+                    (name . "Never show this task again")
+                    (status . ((type . "notLoaded"))))))
+      (my-files-agent-shell--set-conversation-archived
+       "codex:thread-to-delete" t)
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t))
+                ((symbol-function 'my-files-agent-shell--schedule-refresh)
+                 #'ignore))
+        (my-files-agent-shell--render-chat-lists nil nil (list thread))
+        (with-current-buffer my-files-agent-shell--chat-buffer-name
+          (goto-char
+           (button-start
+            (my-files-agent-shell-test--button-with-property
+             'my-files-agent-shell-conversation-key
+             "codex:thread-to-delete")))
+          (my-files-agent-shell-delete-at-point))
+        (should
+         (my-files-agent-shell--conversation-deleted-p
+          "codex:thread-to-delete"))
+        (my-files-agent-shell--render-chat-lists nil nil (list thread))
+        (with-current-buffer my-files-agent-shell--chat-buffer-name
+          (should-not
+           (string-match-p "Never show this task again" (buffer-string))))))))
+
 (ert-deftest my-files-agent-shell-persists-workflow-state-as-json ()
   (my-files-agent-shell-test--with-state ()
     (my-files-agent-shell--set-conversation-stage
      "codex:persistent-thread" 'review)
     (my-files-agent-shell--set-conversation-archived
+     "codex:persistent-thread" t)
+    (my-files-agent-shell--set-conversation-deleted
      "codex:persistent-thread" t)
     (should (= (file-modes my-files-agent-shell-state-file) #o600))
     (setq my-files-agent-shell--conversation-states
@@ -454,39 +484,75 @@
          'review))
     (should
      (my-files-agent-shell--conversation-archived-p
+      "codex:persistent-thread"))
+    (should
+     (my-files-agent-shell--conversation-deleted-p
       "codex:persistent-thread"))))
 
-(ert-deftest my-files-agent-shell-starts-new-chat-in-selected-project ()
+(ert-deftest my-files-agent-shell-loads-state-without-deletion-field ()
+  (my-files-agent-shell-test--with-state ()
+    (write-region
+     (concat "{\"version\":1,\"conversations\":[{"
+             "\"key\":\"codex:legacy-thread\","
+             "\"stage\":\"review\",\"archived\":false}]}\n")
+     nil my-files-agent-shell-state-file nil 'silent)
+    (setq my-files-agent-shell--conversation-states-loaded nil)
+    (should
+     (eq (my-files-agent-shell--conversation-stage "codex:legacy-thread")
+         'review))
+    (should-not
+     (my-files-agent-shell--conversation-deleted-p
+      "codex:legacy-thread"))))
+
+(ert-deftest my-files-agent-shell-starts-new-chat-in-empty-marker-project ()
   (let* ((project (make-temp-file "agent-shell-project-" t))
          (other (make-temp-file "agent-shell-other-" t))
          (caller (generate-new-buffer " agent-chat-panel-caller"))
          (main-buffer (generate-new-buffer " agent-chat-main"))
          (launched-chat (generate-new-buffer " launched-agent-chat"))
+         (config '((:identifier . codex)))
          (main-window (selected-window))
          (original-buffer (window-buffer main-window))
          (my-files-agent-shell--selected-project project)
          (my-files-agent-shell--main-window main-window)
          started-in)
     (unwind-protect
-        (progn
+        (save-window-excursion
+          (delete-other-windows)
+          (write-region "" nil (expand-file-name ".project.toml" project)
+                        nil 'silent)
           (with-current-buffer main-buffer
             (setq default-directory (file-name-as-directory other)))
           (set-window-buffer main-window main-buffer)
-          (cl-letf (((symbol-function 'agent-shell)
-                     (lambda (&optional _argument)
-                       (setq started-in default-directory)
+          (cl-letf (((symbol-function 'agent-shell-start)
+                     (lambda (&rest _arguments)
+                       (setq started-in
+                             (if agent-shell-cwd-function
+                                 (funcall agent-shell-cwd-function)
+                               other))
+                       (display-buffer
+                        launched-chat '(display-buffer-pop-up-window))
                        launched-chat))
+                    ((symbol-function 'agent-shell-select-config)
+                     (lambda (&rest _arguments) config))
                     ((symbol-function 'my-files-agent-shell--schedule-refresh)
                      #'ignore))
             (with-current-buffer caller
               (my-files-agent-shell--new-chat nil)))
+          (should (= (length (window-list)) 1))
+          (should (eq (window-buffer main-window) launched-chat))
           (should
            (equal (file-name-as-directory (file-truename started-in))
                   (file-name-as-directory (file-truename project))))
           (should
            (equal (buffer-local-value
                    'my-files-agent-shell--assigned-project launched-chat)
-                  (my-files-agent-shell--canonical-directory project))))
+                  (my-files-agent-shell--canonical-directory project)))
+          (should
+           (equal
+            (funcall
+             (buffer-local-value 'agent-shell-cwd-function launched-chat))
+            (my-files-agent-shell--canonical-directory project))))
       (set-window-buffer main-window original-buffer)
       (mapc #'kill-buffer (list caller main-buffer launched-chat))
       (delete-directory project t)
@@ -767,6 +833,7 @@
                      ("SPC" . my-files-agent-shell-toggle-mark-at-point)
                      ("i" . my-files-agent-shell-toggle-in-progress-filter)
                      ("a" . my-files-agent-shell-archive-at-point)
+                     ("d" . my-files-agent-shell-delete-at-point)
                      ("m" . my-files-agent-shell-move-at-point)
                      ("u" . my-files-agent-shell-restore-at-point)
                      ("U" . my-files-agent-shell-unmark-all)))
@@ -946,32 +1013,99 @@
          (thread `((id . "codex-session-id")
                    (cwd . ,project)
                    (name . "Resume in Agent Shell")))
+         (resumed-chat (generate-new-buffer " resumed codex task"))
+         (placeholder (generate-new-buffer " resume placeholder"))
+         (config '((:identifier . codex)))
          (my-files-agent-shell--selected-project project)
          (my-files-agent-shell--main-window (selected-window))
          resumed-id
          resumed-directory
          restore-verbosity)
     (unwind-protect
-        (with-temp-buffer
-          (insert-text-button
-           "Open"
-           'my-files-agent-shell-codex-entry thread)
-          (let ((button (button-at (point-min))))
-            (cl-letf (((symbol-function 'my-files-agent-shell--agent-config)
-                       #'ignore)
-                      ((symbol-function 'agent-shell-resume-session)
-                       (lambda (session-id)
-                         (setq resumed-id session-id
-                               resumed-directory default-directory
-                               restore-verbosity
-                               agent-shell-session-restore-verbosity))))
-              (my-files-agent-shell--open-codex-chat button))))
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer my-files-agent-shell--main-window placeholder)
+          (with-temp-buffer
+            (insert-text-button
+             "Open"
+             'my-files-agent-shell-codex-entry thread)
+            (let ((button (button-at (point-min))))
+              (cl-letf (((symbol-function 'agent-shell-buffers) #'ignore)
+                        ((symbol-function
+                          'my-files-agent-shell--agent-config)
+                         #'ignore)
+                        ((symbol-function 'agent-shell-select-config)
+                         (lambda (&rest _arguments) config))
+                        ((symbol-function 'agent-shell-start)
+                         (lambda (&rest arguments)
+                           (setq resumed-id (plist-get arguments :session-id)
+                                 resumed-directory default-directory
+                                 restore-verbosity
+                                 agent-shell-session-restore-verbosity)
+                           (display-buffer
+                            resumed-chat '(display-buffer-pop-up-window))
+                           resumed-chat)))
+                (my-files-agent-shell--open-codex-chat button))))
+          (should (= (length (window-list)) 1))
+          (should
+           (eq (window-buffer my-files-agent-shell--main-window)
+               resumed-chat)))
+      (mapc #'kill-buffer (list resumed-chat placeholder))
       (delete-directory project t))
     (should (equal resumed-id "codex-session-id"))
     (should (equal (my-files-agent-shell--canonical-directory
                     resumed-directory)
                    (my-files-agent-shell--canonical-directory project)))
     (should (eq restore-verbosity 'first-last))))
+
+(ert-deftest my-files-agent-shell-resumes-chat-from-stale-live-row ()
+  (my-files-agent-shell-test--with-state
+      ((my-files-agent-shell--selected-project default-directory))
+    (let* ((chat (generate-new-buffer " stale live row"))
+           (replacement (generate-new-buffer " replacement live row"))
+           (config '((:identifier . codex)))
+           resumed)
+      (unwind-protect
+          (progn
+            (my-files-agent-shell-test--set-session-id chat "stale-session")
+            (with-current-buffer chat
+              (setq default-directory
+                    (file-name-as-directory default-directory))
+              (map-put! agent-shell--state :agent-config config))
+            (cl-letf (((symbol-function
+                        'my-files-agent-shell--chat-status-symbol)
+                       (lambda (_buffer) 'ready))
+                      ((symbol-function 'my-files-agent-shell--chat-title)
+                       (lambda (_buffer) "Stale conversation"))
+                      ((symbol-function
+                        'my-files-agent-shell--subscribe-chat)
+                       #'ignore))
+              (my-files-agent-shell--render-chat-lists (list chat) nil))
+            (with-current-buffer my-files-agent-shell--chat-buffer-name
+              (let ((button
+                     (my-files-agent-shell-test--button-with-property
+                      'my-files-agent-shell-conversation-key
+                      "agent:stale-session")))
+                (kill-buffer chat)
+                (cl-letf (((symbol-function
+                            'my-files-agent-shell--start-resumed-chat)
+                           (lambda (session-id agent-name directory
+                                    &optional agent-config)
+                             (setq resumed
+                                   (list session-id agent-name directory
+                                         agent-config))
+                             replacement)))
+                  (my-files-agent-shell--open-chat button))))
+            (should (equal (nth 0 resumed) "stale-session"))
+            (should
+             (equal (my-files-agent-shell--canonical-directory
+                     (nth 2 resumed))
+                    (my-files-agent-shell--canonical-directory
+                     default-directory)))
+            (should (eq (nth 3 resumed) config)))
+        (mapc (lambda (buffer)
+                (when (buffer-live-p buffer) (kill-buffer buffer)))
+              (list chat replacement))))))
 
 (ert-deftest my-files-agent-shell-opens-existing-buffer-instead-of-resuming ()
   (let* ((project (make-temp-file "agent-shell-open-existing-" t))
@@ -1349,9 +1483,38 @@
         (with-current-buffer my-files-agent-shell--chat-buffer-name
           (let ((text (buffer-string)))
             (should (string-match-p
-                     "\\[codex:active\\] First Codex status" text))
+                     "\\[busy\\] First Codex status" text))
+            (should (string-match-p
+                     "\\[closed\\] Second Codex status" text))
             (should (< (string-match "First Codex status" text)
                        (string-match "Second Codex status" text)))))))))
+
+(ert-deftest my-files-agent-shell-polls-codex-only-after-emacs-is-idle ()
+  (let ((my-files-agent-shell--codex-refresh-timer nil)
+        idle-arguments
+        regular-arguments
+        refresh-force)
+    (cl-letf (((symbol-function 'my-files-agent-shell--visible-p)
+               (lambda () t))
+              ((symbol-function 'run-at-time)
+               (lambda (&rest arguments)
+                 (setq regular-arguments arguments)
+                 'regular-timer))
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (&rest arguments)
+                 (setq idle-arguments arguments)
+                 'idle-timer))
+              ((symbol-function 'my-files-agent-shell--refresh-codex-threads)
+               (lambda (&optional force)
+                 (setq refresh-force force))))
+      (my-files-agent-shell--start-codex-refresh-timer)
+      (should-not regular-arguments)
+      (should (= (nth 0 idle-arguments)
+                 my-files-agent-shell-codex-refresh-interval))
+      (should-not (nth 1 idle-arguments))
+      (funcall (nth 2 idle-arguments))
+      (should refresh-force)
+      (should-not my-files-agent-shell--codex-refresh-timer))))
 
 (ert-deftest my-files-agent-shell-marks-current-and-open-conversations ()
   (my-files-agent-shell-test--with-state

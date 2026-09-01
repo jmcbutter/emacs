@@ -23,3 +23,8 @@ _Avoid_: Running conversation
 A conversation removed from Active Conversations and all workflow stages but
 retained under Archived.
 _Avoid_: Completed conversation, deleted conversation
+
+**Deleted Conversation**:
+An archived conversation hidden permanently from the browser by a local
+tombstone.  Its underlying Codex history or Agent Shell transcript is retained.
+_Avoid_: Destroyed conversation, erased history
