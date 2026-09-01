@@ -24,6 +24,9 @@
 ;; Runtime status remains visible on each row but never changes workflow stage.
 ;; Pressing i limits the Areas and Projects panels to scopes that contain an
 ;; active conversation in the In Progress workflow stage.
+;; Agent conversations use a centered, fixed-width column: agent replies stay
+;; left-aligned, submitted user turns sit against the right edge, and activity
+;; such as thoughts and edits starts collapsed behind a compact separator.
 ;; A leading `▶' identifies the conversation in the main window, `●' marks
 ;; conversations with open buffers, and `*' marks conversations selected for a
 ;; batch workflow action.  Space toggles a mark and U clears all marks.  Delete
@@ -124,6 +127,21 @@ of the conversation to confirm that the correct session was restored."
                  (const :tag "Full visible history" full))
   :group 'my-files-agent-shell)
 
+(defcustom my-files-agent-shell-chat-style-enabled t
+  "Whether Agent Shell buffers use the conversation-oriented chat style."
+  :type 'boolean
+  :group 'my-files-agent-shell)
+
+(defcustom my-files-agent-shell-chat-message-width 80
+  "Maximum width, in columns, of user and agent messages.
+
+The conversation column is centered when its window is wider than this.
+Submitted user turns align to its right edge and agent turns to its left edge.
+Set this to 120 for a wider transcript."
+  :type '(integer :tag "Columns")
+  :safe (lambda (value) (and (integerp value) (> value 0)))
+  :group 'my-files-agent-shell)
+
 (defface my-files-agent-shell-heading
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face used for panel headings."
@@ -153,6 +171,28 @@ of the conversation to confirm that the correct session was restored."
 (defface my-files-agent-shell-muted
   '((t :inherit shadow))
   "Face used for secondary and empty-state text."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-user-message
+  '((((class color) (background light)) :background "gray94")
+    (((class color) (background dark)) :background "gray20")
+    (t :inherit highlight))
+  "Face used for right-aligned submitted user messages."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-activity-separator
+  '((t :inherit shadow :weight bold :height 0.85))
+  "Face used for collapsed Thought/Edit activity separators."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-activity-detail
+  '((t :inherit shadow :height 0.8))
+  "Face used for activity items revealed below a separator."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-activity-rule
+  '((t :inherit shadow :strike-through t))
+  "Face used to extend an activity separator to the column edge."
   :group 'my-files-agent-shell)
 
 (defconst my-files-agent-shell--area-buffer-name " *My Files Areas*")
@@ -191,11 +231,14 @@ of the conversation to confirm that the correct session was restored."
 (defvar-local my-files-agent-shell--selected-path-button nil)
 (defvar-local my-files-agent-shell--marked-conversation-keys nil)
 (defvar-local my-files-agent-shell--pending-selection-key nil)
+(defvar-local my-files-agent-shell-chat-style-mode nil)
+(defvar-local my-files-agent-shell--saved-expansion-settings nil)
 (defvar my-files-agent-shell--rendering-section nil)
 (defvar my-files-agent-shell--rendering-live-buffers nil)
 (defvar my-files-agent-shell--rendering-main-chat nil)
 (defvar my-files-agent-shell--echoed-conversation-title nil
   "Last browser-owned conversation title displayed in the echo area.")
+(defvar my-files-agent-shell--adjusting-chat-window-margins nil)
 
 (defconst my-files-agent-shell--workflow-stages
   '((in-progress . "In Progress")
@@ -231,6 +274,8 @@ of the conversation to confirm that the correct session was restored."
 (declare-function agent-shell-status "agent-shell")
 (declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function agent-shell--resolved-agent-configs "agent-shell")
+(declare-function agent-shell-chat--relabel "agent-shell-chat-mode")
+(declare-function agent-shell-ui--set-group-collapsed "agent-shell-ui")
 (declare-function codex-ide--create-query-session "codex-ide-session")
 (declare-function codex-ide--query-only-session-for-directory
                   "codex-ide-session")
@@ -239,9 +284,370 @@ of the conversation to confirm that the correct session was restored."
 (declare-function codex-ide-session-process "codex-ide-core")
 (declare-function codex-ide-session-status "codex-ide-core")
 (defvar agent-shell--state)
+(defvar agent-shell-activity-group-expand-by-default)
 (defvar agent-shell-cwd-function)
+(defvar agent-shell-section-functions)
 (defvar agent-shell-session-restore-verbosity)
+(defvar agent-shell-thought-process-expand-by-default)
+(defvar agent-shell-tool-use-expand-by-default)
 (defvar codex-ide-cli-path)
+
+(defun my-files-agent-shell--chat-column-margins (available-width)
+  "Return centered margins for AVAILABLE-WIDTH columns.
+
+The usable conversation column is no wider than
+`my-files-agent-shell-chat-message-width'."
+  (let* ((column-width
+          (min available-width
+               (max 1 my-files-agent-shell-chat-message-width)))
+         (extra (max 0 (- available-width column-width)))
+         (left (/ extra 2)))
+    (cons left (- extra left))))
+
+(defun my-files-agent-shell--restore-chat-window-margins (window)
+  "Restore WINDOW margins saved before chat styling took ownership."
+  (when-let* ((state
+              (window-parameter window
+                                'my-files-agent-shell-chat-column)))
+    (let ((base (plist-get state :base)))
+      (set-window-margins window (car base) (cdr base))
+      (set-window-parameter window
+                            'my-files-agent-shell-chat-column nil))))
+
+(defun my-files-agent-shell--update-chat-window-column (window)
+  "Center the styled conversation column shown in WINDOW.
+
+When WINDOW no longer shows a styled Agent Shell buffer, restore the margins
+that existed before this package changed them."
+  (when (and (window-live-p window)
+             (not my-files-agent-shell--adjusting-chat-window-margins))
+    (let ((my-files-agent-shell--adjusting-chat-window-margins t)
+          (buffer (window-buffer window)))
+      (if (and (buffer-live-p buffer)
+               (buffer-local-value
+                'my-files-agent-shell-chat-style-mode buffer))
+          (let* ((state
+                  (window-parameter
+                   window 'my-files-agent-shell-chat-column))
+                 (current (window-margins window))
+                 (available
+                  (+ (window-body-width window)
+                     (or (car current) 0)
+                     (or (cdr current) 0)))
+                 (margins
+                  (with-current-buffer buffer
+                    (my-files-agent-shell--chat-column-margins
+                     available)))
+                 (base (or (plist-get state :base) current)))
+            (set-window-margins
+             window
+             (and (> (car margins) 0) (car margins))
+             (and (> (cdr margins) 0) (cdr margins)))
+            (set-window-parameter
+             window 'my-files-agent-shell-chat-column
+             (list :buffer buffer :base base)))
+        (my-files-agent-shell--restore-chat-window-margins window)))))
+
+(defun my-files-agent-shell--update-visible-chat-columns (&optional _frame)
+  "Update the chat column in every window showing the current buffer."
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (my-files-agent-shell--update-chat-window-column window)))
+
+(defun my-files-agent-shell--release-chat-window-columns ()
+  "Release every window margin currently owned by this chat buffer."
+  (dolist (frame (frame-list))
+    (dolist (window (window-list frame 'no-minibuffer))
+      (when-let* ((state
+                  (window-parameter
+                   window 'my-files-agent-shell-chat-column))
+                  ((eq (plist-get state :buffer) (current-buffer))))
+        (my-files-agent-shell--restore-chat-window-margins window)))))
+
+(defun my-files-agent-shell--message-display-width (start end)
+  "Return the visible bubble width for the message from START to END."
+  (let ((widest 1))
+    (dolist (line
+             (split-string
+              (buffer-substring-no-properties start end) "\n" nil))
+      (setq widest (max widest (string-width line))))
+    (min widest (max 1 my-files-agent-shell-chat-message-width))))
+
+(defun my-files-agent-shell--right-alignment-prefix (width)
+  "Return a display prefix whose content starts WIDTH columns from the right."
+  (propertize
+   " " 'display `(space :align-to (- right-fringe ,width))))
+
+(defun my-files-agent-shell--face-run-start (string face)
+  "Return the first position in STRING whose `face' includes FACE."
+  (let ((position 0)
+        found)
+    (while (and (< position (length string)) (not found))
+      (let ((value (get-text-property position 'face string)))
+        (when (or (eq value face)
+                  (and (listp value) (memq face value)))
+          (setq found position)))
+      (unless found
+        (setq position
+              (or (next-single-property-change
+                   position 'face string (length string))
+                  (length string)))))
+    found))
+
+(defun my-files-agent-shell--chat-overlay-p (overlay category)
+  "Return non-nil when OVERLAY belongs to chat CATEGORY."
+  (eq (overlay-get overlay 'category) category))
+
+(defun my-files-agent-shell--style-chat-label (overlay prefix)
+  "Apply PREFIX to the user label carried by OVERLAY."
+  (when-let* ((before (overlay-get overlay 'before-string))
+              ((stringp before))
+              (start
+               (my-files-agent-shell--face-run-start
+                before 'agent-shell-chat-me-label)))
+    (let* ((styled (copy-sequence before))
+           (end (or (next-single-property-change
+                     start 'face styled (length styled))
+                    (length styled))))
+      (add-text-properties
+       start end `(line-prefix ,prefix wrap-prefix ,prefix) styled)
+      (overlay-put overlay 'before-string styled))))
+
+(defun my-files-agent-shell--preceding-user-label (labels input)
+  "Return the closest member of LABELS preceding INPUT."
+  (seq-reduce
+   (lambda (closest candidate)
+     (if (and (<= (overlay-end candidate) (overlay-start input))
+              (or (not closest)
+                  (> (overlay-end candidate) (overlay-end closest))))
+         candidate
+       closest))
+   labels nil))
+
+(defun my-files-agent-shell--style-chat-overlays ()
+  "Right-align existing submitted user turns in the current chat buffer."
+  (when my-files-agent-shell-chat-style-mode
+    (let* ((overlays (overlays-in (point-min) (point-max)))
+           (inputs
+            (seq-filter
+             (lambda (overlay)
+               (my-files-agent-shell--chat-overlay-p
+                overlay 'agent-shell-chat-me-input))
+             overlays))
+           (labels
+            (seq-filter
+             (lambda (overlay)
+               (and (memq (overlay-get overlay 'category)
+                          '(agent-shell-chat-me-label
+                            agent-shell-chat-me))
+                    (stringp (overlay-get overlay 'before-string))
+                    (my-files-agent-shell--face-run-start
+                     (overlay-get overlay 'before-string)
+                     'agent-shell-chat-me-label)))
+             overlays)))
+      (dolist (input inputs)
+        (let* ((cached
+                (overlay-get input
+                             'my-files-agent-shell-message-width))
+               (width
+                (if (and (consp cached)
+                         (= (car cached)
+                            my-files-agent-shell-chat-message-width))
+                    (cdr cached)
+                  (let ((computed
+                         (my-files-agent-shell--message-display-width
+                          (overlay-start input) (overlay-end input))))
+                    (overlay-put
+                     input 'my-files-agent-shell-message-width
+                     (cons my-files-agent-shell-chat-message-width computed))
+                    computed)))
+               (prefix
+                (my-files-agent-shell--right-alignment-prefix width))
+               (label
+                (my-files-agent-shell--preceding-user-label
+                 labels input)))
+          (overlay-put input 'line-prefix prefix)
+          (overlay-put input 'wrap-prefix prefix)
+          (overlay-put input 'face 'my-files-agent-shell-user-message)
+          (when label
+            (my-files-agent-shell--style-chat-label label prefix)))))))
+
+(defun my-files-agent-shell--activity-id-p (identifier)
+  "Return non-nil when IDENTIFIER names an Agent Shell activity group."
+  (and (stringp identifier)
+       (string-match-p (rx "activity-" (+ digit) string-end)
+                       identifier)))
+
+(defun my-files-agent-shell--activity-state-p (state)
+  "Return non-nil when Agent Shell fragment STATE belongs to activity."
+  (or (my-files-agent-shell--activity-id-p
+       (map-elt state :group-id))
+      (and (eq (map-elt state :kind) 'group)
+           (my-files-agent-shell--activity-id-p
+            (map-elt state :qualified-id)))))
+
+(defun my-files-agent-shell--style-activity-block (start end)
+  "Style the activity fragment beginning at START and ending by END."
+  (when-let* ((state (get-text-property start 'agent-shell-ui-state))
+              ((my-files-agent-shell--activity-state-p state)))
+    (let* ((header-end
+            (min end
+                 (save-excursion
+                   (goto-char start)
+                   (line-end-position))))
+           (group (eq (map-elt state :kind) 'group)))
+      (remove-overlays
+       start (max header-end (min end (1+ start)))
+       'category 'my-files-agent-shell-activity-separator)
+      (when (< start header-end)
+        (let ((overlay (make-overlay start header-end nil t nil)))
+          (overlay-put overlay 'category
+                       'my-files-agent-shell-activity-separator)
+          (overlay-put overlay 'evaporate t)
+          (overlay-put
+           overlay 'face
+           (if group
+               'my-files-agent-shell-activity-separator
+             'my-files-agent-shell-activity-detail))
+          (when group
+            (overlay-put
+             overlay 'after-string
+             (propertize
+              " " 'display '(space :align-to right-fringe)
+              'face 'my-files-agent-shell-activity-rule))))))))
+
+(defun my-files-agent-shell--style-activity-section (range)
+  "Style activity blocks described by Agent Shell RANGE."
+  (when my-files-agent-shell-chat-style-mode
+    (dolist (key '(:group-header :block))
+      (when-let* ((block (map-elt range key))
+                  (start (map-elt block :start))
+                  (end (map-elt block :end)))
+        (my-files-agent-shell--style-activity-block start end)))))
+
+(defun my-files-agent-shell--activity-state-ranges ()
+  "Return Agent Shell activity state ranges in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let (ranges match)
+      (while (setq match
+                   (text-property-search-forward
+                    'agent-shell-ui-state nil
+                    (lambda (_value state)
+                      (my-files-agent-shell--activity-state-p state))))
+        (push (list (prop-match-beginning match)
+                    (prop-match-end match)
+                    (prop-match-value match))
+              ranges))
+      (nreverse ranges))))
+
+(defun my-files-agent-shell--collapse-existing-activity-groups ()
+  "Collapse activity groups already rendered in the current buffer."
+  (let (qualified-ids)
+    (dolist (range (my-files-agent-shell--activity-state-ranges))
+      (let ((state (nth 2 range)))
+        (when (and (eq (map-elt state :kind) 'group)
+                   (not (map-elt state :collapsed)))
+          (cl-pushnew (map-elt state :qualified-id)
+                      qualified-ids :test #'equal))))
+    (dolist (qualified-id qualified-ids)
+      (let ((inhibit-read-only t)
+            (buffer-undo-list t))
+        (agent-shell-ui--set-group-collapsed qualified-id t)))))
+
+(defun my-files-agent-shell--style-existing-activity-fragments ()
+  "Apply compact styling to all existing Agent Shell activity fragments."
+  (dolist (range (my-files-agent-shell--activity-state-ranges))
+    (my-files-agent-shell--style-activity-block
+     (nth 0 range) (nth 1 range))))
+
+(defun my-files-agent-shell--save-and-collapse-expansion-settings ()
+  "Save Agent Shell expansion defaults and make activity compact."
+  (unless my-files-agent-shell--saved-expansion-settings
+    (setq-local
+     my-files-agent-shell--saved-expansion-settings
+     (mapcar
+      (lambda (variable)
+        (list variable (local-variable-p variable) (symbol-value variable)))
+      '(agent-shell-activity-group-expand-by-default
+        agent-shell-thought-process-expand-by-default
+        agent-shell-tool-use-expand-by-default))))
+  (setq-local agent-shell-activity-group-expand-by-default nil)
+  (setq-local agent-shell-thought-process-expand-by-default nil)
+  (setq-local agent-shell-tool-use-expand-by-default nil))
+
+(defun my-files-agent-shell--restore-expansion-settings ()
+  "Restore expansion defaults saved before enabling chat styling."
+  (dolist (setting my-files-agent-shell--saved-expansion-settings)
+    (let ((variable (nth 0 setting))
+          (was-local (nth 1 setting))
+          (value (nth 2 setting)))
+      (if was-local
+          (set (make-local-variable variable) value)
+        (kill-local-variable variable))))
+  (setq-local my-files-agent-shell--saved-expansion-settings nil))
+
+(defun my-files-agent-shell--after-chat-relabel (&rest _ignored)
+  "Reapply user-turn alignment after Agent Shell refreshes chat labels."
+  (when my-files-agent-shell-chat-style-mode
+    (my-files-agent-shell--style-chat-overlays)))
+
+(defun my-files-agent-shell--enable-chat-style ()
+  "Enable conversation styling in the current Agent Shell buffer."
+  (my-files-agent-shell--save-and-collapse-expansion-settings)
+  (add-hook 'agent-shell-section-functions
+            #'my-files-agent-shell--style-activity-section nil t)
+  (add-hook 'window-size-change-functions
+            #'my-files-agent-shell--update-chat-window-column nil t)
+  (add-hook 'window-buffer-change-functions
+            #'my-files-agent-shell--update-chat-window-column nil t)
+  (add-hook 'kill-buffer-hook
+            #'my-files-agent-shell--release-chat-window-columns nil t)
+  (my-files-agent-shell--collapse-existing-activity-groups)
+  (my-files-agent-shell--style-existing-activity-fragments)
+  (when (fboundp 'agent-shell-chat--relabel)
+    (agent-shell-chat--relabel))
+  (my-files-agent-shell--style-chat-overlays)
+  (my-files-agent-shell--update-visible-chat-columns))
+
+(defun my-files-agent-shell--disable-chat-style ()
+  "Remove conversation styling from the current Agent Shell buffer."
+  (remove-hook 'agent-shell-section-functions
+               #'my-files-agent-shell--style-activity-section t)
+  (remove-hook 'window-size-change-functions
+               #'my-files-agent-shell--update-chat-window-column t)
+  (remove-hook 'window-buffer-change-functions
+               #'my-files-agent-shell--update-chat-window-column t)
+  (remove-hook 'kill-buffer-hook
+               #'my-files-agent-shell--release-chat-window-columns t)
+  (remove-overlays (point-min) (point-max)
+                   'category 'my-files-agent-shell-activity-separator)
+  (dolist (overlay (overlays-in (point-min) (point-max)))
+    (when (my-files-agent-shell--chat-overlay-p
+           overlay 'agent-shell-chat-me-input)
+      (overlay-put overlay 'face nil)
+      (overlay-put overlay 'my-files-agent-shell-message-width nil)))
+  (my-files-agent-shell--restore-expansion-settings)
+  (my-files-agent-shell--release-chat-window-columns)
+  (when (fboundp 'agent-shell-chat--relabel)
+    (agent-shell-chat--relabel)))
+
+(define-minor-mode my-files-agent-shell-chat-style-mode
+  "Use a compact, left/right-aligned conversation layout."
+  :lighter nil
+  :group 'my-files-agent-shell
+  (cond
+   ((not my-files-agent-shell-chat-style-mode)
+    (my-files-agent-shell--disable-chat-style))
+   ((derived-mode-p 'agent-shell-mode)
+    (my-files-agent-shell--enable-chat-style))
+   (t
+    (setq my-files-agent-shell-chat-style-mode nil)
+    (user-error "Chat styling only applies to Agent Shell buffers"))))
+
+(defun my-files-agent-shell--maybe-enable-chat-style ()
+  "Enable manager chat styling when configured."
+  (when my-files-agent-shell-chat-style-enabled
+    (my-files-agent-shell-chat-style-mode 1)))
 
 (defun my-files-agent-shell--workflow-stage-p (stage)
   "Return non-nil when STAGE is a supported workflow stage."
@@ -1694,6 +2100,8 @@ All other text properties at POSITION are preserved."
   (unless (window-live-p my-files-agent-shell--main-window)
     (user-error "The My Files main window is no longer available"))
   (set-window-buffer my-files-agent-shell--main-window buffer)
+  (my-files-agent-shell--update-chat-window-column
+   my-files-agent-shell--main-window)
   (select-window my-files-agent-shell--main-window)
   (my-files-agent-shell--update-chat-row-indicators)
   buffer)
@@ -1940,6 +2348,8 @@ All other text properties at POSITION are preserved."
   "Display BUFFER in the browser's main window for `display-buffer'."
   (when (window-live-p my-files-agent-shell--main-window)
     (set-window-buffer my-files-agent-shell--main-window buffer)
+    (my-files-agent-shell--update-chat-window-column
+     my-files-agent-shell--main-window)
     my-files-agent-shell--main-window))
 
 (defun my-files-agent-shell--start-resumed-chat
@@ -2741,6 +3151,22 @@ their requested space before the Conversations panel uses the remainder."
   (if (my-files-agent-shell--visible-p)
       (my-files-agent-shell-close)
     (my-files-agent-shell-open)))
+
+(add-hook 'agent-shell-mode-hook
+          #'my-files-agent-shell--maybe-enable-chat-style)
+
+(unless (advice-member-p #'my-files-agent-shell--after-chat-relabel
+                         'agent-shell-chat--relabel)
+  (advice-add 'agent-shell-chat--relabel :after
+              #'my-files-agent-shell--after-chat-relabel))
+
+;; The package can be loaded after conversations already exist (for example,
+;; by invoking the browser command for the first time mid-session).
+(when my-files-agent-shell-chat-style-enabled
+  (dolist (buffer (agent-shell-buffers))
+    (with-current-buffer buffer
+      (unless my-files-agent-shell-chat-style-mode
+        (my-files-agent-shell-chat-style-mode 1)))))
 
 (provide 'my-files-agent-shell)
 ;;; my-files-agent-shell.el ends here

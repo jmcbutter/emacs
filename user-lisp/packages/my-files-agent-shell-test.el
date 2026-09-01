@@ -1752,5 +1752,113 @@
                        'in-progress))))))
         (mapc #'kill-buffer (list first moved next))))))
 
+(ert-deftest my-files-agent-shell-chat-style-centers-the-message-column ()
+  (let ((my-files-agent-shell-chat-message-width 80))
+    (should
+     (equal (my-files-agent-shell--chat-column-margins 120)
+            '(20 . 20)))
+    (should
+     (equal (my-files-agent-shell--chat-column-margins 121)
+            '(20 . 21)))
+    (should
+     (equal (my-files-agent-shell--chat-column-margins 72)
+            '(0 . 0)))))
+
+(ert-deftest my-files-agent-shell-chat-style-restores-window-margins ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((window (selected-window))
+           (buffer (generate-new-buffer " chat style window"))
+           (original (window-margins window)))
+      (unwind-protect
+          (progn
+            (set-window-buffer window buffer)
+            (with-current-buffer buffer
+              (setq-local my-files-agent-shell-chat-style-mode t)
+              (setq-local my-files-agent-shell-chat-message-width 40))
+            (my-files-agent-shell--update-chat-window-column window)
+            (should (= (window-body-width window) 40))
+            (should (window-parameter
+                     window 'my-files-agent-shell-chat-column))
+            (with-current-buffer buffer
+              (setq-local my-files-agent-shell-chat-style-mode nil))
+            (my-files-agent-shell--update-chat-window-column window)
+            (should (equal (window-margins window) original))
+            (should-not (window-parameter
+                         window 'my-files-agent-shell-chat-column)))
+        (kill-buffer buffer)))))
+
+(ert-deftest my-files-agent-shell-chat-style-right-aligns-submitted-user-turns ()
+  (with-temp-buffer
+    (insert "Short message")
+    (let* ((input (make-overlay (point-min) (point-max)))
+           (label (make-overlay (point-min) (point-min)))
+           (label-text
+            (propertize " Me " 'face 'agent-shell-chat-me-label)))
+      (overlay-put input 'category 'agent-shell-chat-me-input)
+      (overlay-put label 'category 'agent-shell-chat-me-label)
+      (overlay-put label 'before-string (concat "\n" label-text "\n"))
+      (setq-local my-files-agent-shell-chat-style-mode t)
+      (let ((my-files-agent-shell-chat-message-width 80))
+        (my-files-agent-shell--style-chat-overlays))
+      (let* ((prefix (overlay-get input 'line-prefix))
+             (styled-label (overlay-get label 'before-string))
+             (label-start (text-property-any
+                           0 (length styled-label)
+                           'face 'agent-shell-chat-me-label
+                           styled-label)))
+        (should (eq (overlay-get input 'face)
+                    'my-files-agent-shell-user-message))
+        (should
+         (equal (get-text-property 0 'display prefix)
+                '(space :align-to (- right-fringe 13))))
+        (should label-start)
+        (should
+         (equal
+          (get-text-property
+           label-start 'line-prefix styled-label)
+          prefix))))))
+
+(ert-deftest my-files-agent-shell-chat-style-collapses-and-separates-activity ()
+  (with-temp-buffer
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-group-model
+      :namespace-id "turn" :block-id "activity-1"
+      :label-left "Thought" :expanded t)
+     :expanded t)
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model
+      :namespace-id "turn" :block-id "edit-1"
+      :label-left "Edit" :body "Changed a file"
+      :group-id "activity-1")
+     :expanded t)
+    (setq-local my-files-agent-shell-chat-style-mode t)
+    (my-files-agent-shell--collapse-existing-activity-groups)
+    (my-files-agent-shell--style-existing-activity-fragments)
+    (goto-char (point-min))
+    (let* ((group-match
+            (text-property-search-forward
+             'agent-shell-ui-state nil
+             (lambda (_value state)
+               (eq (map-elt state :kind) 'group))))
+           (state (and group-match (prop-match-value group-match)))
+           (separator
+            (seq-find
+             (lambda (overlay)
+               (eq (overlay-get overlay 'category)
+                   'my-files-agent-shell-activity-separator))
+             (overlays-in (point-min) (point-max)))))
+      (should group-match)
+      (should (map-elt state :collapsed))
+      (should separator)
+      (should
+       (eq (overlay-get separator 'face)
+           'my-files-agent-shell-activity-separator))
+      (should
+       (equal
+        (get-text-property
+         0 'display (overlay-get separator 'after-string))
+        '(space :align-to right-fringe))))))
+
 (provide 'my-files-agent-shell-test)
 ;;; my-files-agent-shell-test.el ends here
