@@ -9,9 +9,14 @@
 
 ;;; Commentary:
 
-;; `my-files-agent-shell-toggle' opens a four-column workspace:
+;; `my-files-agent-shell-toggle' opens a two-column workspace:
 ;;
-;;   Areas | Projects | Agent chats | Main chat
+;;   Agent chats | Main chat
+;;
+;; Press v to reveal a shallow navigation row above it:
+;;
+;;   Areas      | Projects
+;;   Agent chats | Main chat
 ;;
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
@@ -24,9 +29,11 @@
 ;; Runtime status remains visible on each row but never changes workflow stage.
 ;; Pressing i limits the Areas and Projects panels to scopes that contain an
 ;; active conversation in the In Progress workflow stage.
-;; Agent conversations use a centered, fixed-width column: agent replies stay
-;; left-aligned, submitted user turns use a tinted block and accent gutter, and
-;; activity such as thoughts and edits starts collapsed behind a compact rule.
+;; Codex-generated session titles name both live chat rows and their Emacs
+;; buffers.  Agent conversations use a centered, fixed-width column: replies
+;; stay left-aligned, submitted user turns use a tinted block and accent gutter,
+;; and activity such as thoughts and edits starts collapsed behind a compact
+;; rule.
 ;; A leading `▶' identifies the conversation in the main window, `●' marks
 ;; conversations with open buffers, and `*' marks conversations selected for a
 ;; batch workflow action.  Space toggles a mark and U clears all marks.  Delete
@@ -80,18 +87,21 @@ discovery quick."
   :type 'regexp
   :group 'my-files-agent-shell)
 
-(defcustom my-files-agent-shell-area-width 18
-  "Preferred width, in columns, of the Areas window."
-  :type 'natnum
-  :group 'my-files-agent-shell)
-
-(defcustom my-files-agent-shell-project-width 24
-  "Preferred width, in columns, of the Projects window."
-  :type 'natnum
-  :group 'my-files-agent-shell)
-
 (defcustom my-files-agent-shell-chat-width 32
   "Preferred width, in columns, of the Chats window."
+  :type 'natnum
+  :group 'my-files-agent-shell)
+
+(defcustom my-files-agent-shell-chat-content-maximum-width 48
+  "Maximum width used when Chats grows to fit rendered content.
+
+An explicitly configured `my-files-agent-shell-chat-width' can still exceed
+this value."
+  :type 'natnum
+  :group 'my-files-agent-shell)
+
+(defcustom my-files-agent-shell-navigation-height 8
+  "Maximum height, in lines, of the Areas and Projects row."
   :type 'natnum
   :group 'my-files-agent-shell)
 
@@ -285,6 +295,7 @@ transcript."
 (declare-function agent-shell--resolved-agent-configs "agent-shell")
 (declare-function agent-shell-chat--relabel "agent-shell-chat-mode")
 (declare-function agent-shell-ui--set-group-collapsed "agent-shell-ui")
+(declare-function shell-maker-set-buffer-name "shell-maker")
 (declare-function codex-ide--create-query-session "codex-ide-session")
 (declare-function codex-ide--query-only-session-for-directory
                   "codex-ide-session")
@@ -809,6 +820,7 @@ changes made before live and cached representations were coalesced."
   "2" #'my-files-agent-shell-focus-projects
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
+  "v" #'my-files-agent-shell-toggle-navigation-panels
   "SPC" #'my-files-agent-shell-toggle-mark-at-point
   "i" #'my-files-agent-shell-toggle-in-progress-filter
   "a" #'my-files-agent-shell-archive-at-point
@@ -1054,20 +1066,24 @@ changes made before live and cached representations were coalesced."
 
 ;;;###autoload
 (defun my-files-agent-shell-focus-browser ()
-  "Open the browser if needed, then focus its Areas panel."
+  "Open the browser if needed, then focus its Chats panel."
   (interactive)
   (unless (my-files-agent-shell--visible-p)
     (my-files-agent-shell-open))
-  (my-files-agent-shell-focus-areas))
+  (my-files-agent-shell-focus-chats))
 
 (defun my-files-agent-shell-focus-areas ()
-  "Focus the Areas panel."
+  "Reveal the navigation row and focus the Areas panel."
   (interactive)
+  (unless (my-files-agent-shell--navigation-visible-p)
+    (my-files-agent-shell--show-navigation-panels))
   (my-files-agent-shell--focus-window my-files-agent-shell--area-window))
 
 (defun my-files-agent-shell-focus-projects ()
-  "Focus the Projects panel."
+  "Reveal the navigation row and focus the Projects panel."
   (interactive)
+  (unless (my-files-agent-shell--navigation-visible-p)
+    (my-files-agent-shell--show-navigation-panels))
   (my-files-agent-shell--focus-window my-files-agent-shell--project-window))
 
 (defun my-files-agent-shell-focus-chats ()
@@ -1081,28 +1097,34 @@ changes made before live and cached representations were coalesced."
   (my-files-agent-shell--focus-window my-files-agent-shell--main-window))
 
 (defun my-files-agent-shell-next-panel ()
-  "Move focus one panel to the right, wrapping after the main window."
+  "Move focus through visible panels, wrapping after the main window."
   (interactive)
   (my-files-agent-shell--focus-window
    (cond
-    ((eq (selected-window) my-files-agent-shell--area-window)
+    ((and (my-files-agent-shell--navigation-visible-p)
+          (eq (selected-window) my-files-agent-shell--area-window))
      my-files-agent-shell--project-window)
-    ((eq (selected-window) my-files-agent-shell--project-window)
+    ((and (my-files-agent-shell--navigation-visible-p)
+          (eq (selected-window) my-files-agent-shell--project-window))
      my-files-agent-shell--chat-window)
     ((eq (selected-window) my-files-agent-shell--chat-window)
      my-files-agent-shell--main-window)
-    (t my-files-agent-shell--area-window))))
+    ((my-files-agent-shell--navigation-visible-p)
+     my-files-agent-shell--area-window)
+    (t my-files-agent-shell--chat-window))))
 
 (defun my-files-agent-shell-previous-panel ()
-  "Move focus one panel to the left, wrapping before the Areas panel."
+  "Move focus backward through visible panels, wrapping at the start."
   (interactive)
   (my-files-agent-shell--focus-window
    (cond
     ((eq (selected-window) my-files-agent-shell--main-window)
      my-files-agent-shell--chat-window)
-    ((eq (selected-window) my-files-agent-shell--chat-window)
+    ((and (my-files-agent-shell--navigation-visible-p)
+          (eq (selected-window) my-files-agent-shell--chat-window))
      my-files-agent-shell--project-window)
-    ((eq (selected-window) my-files-agent-shell--project-window)
+    ((and (my-files-agent-shell--navigation-visible-p)
+          (eq (selected-window) my-files-agent-shell--project-window))
      my-files-agent-shell--area-window)
     (t my-files-agent-shell--main-window))))
 
@@ -1530,11 +1552,14 @@ When FORCE is non-nil, ignore the normal refresh interval."
                 (plist-get right :modified)))))))
 
 (defun my-files-agent-shell--visible-p ()
-  "Return non-nil when all browser panel windows are live."
-  (and (window-live-p my-files-agent-shell--area-window)
-       (window-live-p my-files-agent-shell--project-window)
-       (window-live-p my-files-agent-shell--chat-window)
+  "Return non-nil when the browser's persistent windows are live."
+  (and (window-live-p my-files-agent-shell--chat-window)
        (window-live-p my-files-agent-shell--main-window)))
+
+(defun my-files-agent-shell--navigation-visible-p ()
+  "Return non-nil when both optional navigation windows are live."
+  (and (window-live-p my-files-agent-shell--area-window)
+       (window-live-p my-files-agent-shell--project-window)))
 
 (defun my-files-agent-shell--panel-buffer (name mode)
   "Return panel buffer NAME initialized with MODE."
@@ -1587,16 +1612,48 @@ SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
         (button-get button 'my-files-agent-shell-path))
   (my-files-agent-shell-refresh))
 
+(defun my-files-agent-shell--clean-chat-title (title)
+  "Return TITLE's first non-empty trimmed line, or nil."
+  (when (stringp title)
+    (let ((line (car (split-string
+                      (string-trim (substring-no-properties title))
+                      "\n" t))))
+      (and line (not (string-empty-p line)) line))))
+
+(defun my-files-agent-shell--session-title (buffer)
+  "Return the generated session title stored for agent-shell BUFFER."
+  (with-current-buffer buffer
+    (my-files-agent-shell--clean-chat-title
+     (and (boundp 'agent-shell--state)
+          (map-nested-elt agent-shell--state '(:session :title))))))
+
 (defun my-files-agent-shell--chat-title (buffer)
   "Return a concise display title for agent-shell BUFFER."
-  (with-current-buffer buffer
-    (let ((title (and (boundp 'agent-shell--state)
-                      (map-nested-elt agent-shell--state
-                                      '(:session :title)))))
-      (or (and (stringp title)
-               (not (string-empty-p (string-trim title)))
-               (car (split-string (string-trim title) "\n" t)))
-          (buffer-name buffer)))))
+  (or (my-files-agent-shell--session-title buffer)
+      (buffer-name buffer)))
+
+(defun my-files-agent-shell--buffer-name-matches-title-p (name title)
+  "Return non-nil when NAME is TITLE or Emacs's unique variant of it."
+  (or (equal name title)
+      (string-match-p
+       (format "\\`%s<[0-9]+>\\'" (regexp-quote title)) name)))
+
+(defun my-files-agent-shell--rename-chat-buffer (buffer title)
+  "Rename live agent-shell BUFFER to a clean form of TITLE."
+  (when (buffer-live-p buffer)
+    (when-let* ((title (my-files-agent-shell--clean-chat-title title)))
+      (unless (my-files-agent-shell--buffer-name-matches-title-p
+               (buffer-name buffer) title)
+        (if (fboundp 'shell-maker-set-buffer-name)
+            (shell-maker-set-buffer-name buffer title)
+          (with-current-buffer buffer
+            (rename-buffer title t)))))))
+
+(defun my-files-agent-shell--sync-chat-buffer-name (buffer)
+  "Rename live agent-shell BUFFER to its generated session title."
+  (when (buffer-live-p buffer)
+    (my-files-agent-shell--rename-chat-buffer
+     buffer (my-files-agent-shell--session-title buffer))))
 
 (defun my-files-agent-shell--chat-status-symbol (buffer)
   "Return the status symbol for agent-shell BUFFER."
@@ -2037,10 +2094,15 @@ All other text properties at POSITION are preserved."
         (unless session-id
           (my-files-agent-shell-refresh)
           (user-error "That conversation is still starting and cannot resume"))
-        (my-files-agent-shell--start-resumed-chat
-         session-id nil
-         (button-get button 'my-files-agent-shell-directory)
-         (button-get button 'my-files-agent-shell-agent-config))))))
+        (let ((resumed
+               (my-files-agent-shell--start-resumed-chat
+                session-id nil
+                (button-get button 'my-files-agent-shell-directory)
+                (button-get button 'my-files-agent-shell-agent-config))))
+          (my-files-agent-shell--rename-chat-buffer
+           resumed
+           (button-get button 'my-files-agent-shell-conversation-title))
+          resumed)))))
 
 (defun my-files-agent-shell--insert-codex-chat-button (thread)
   "Insert a workflow-controlled row for Codex THREAD."
@@ -2075,8 +2137,12 @@ All other text properties at POSITION are preserved."
                         my-files-agent-shell--selected-area)))
     (unless thread-id
       (user-error "That Codex task has no thread id"))
-    (my-files-agent-shell--start-resumed-chat
-     thread-id "Codex" directory)))
+    (let ((buffer
+           (my-files-agent-shell--start-resumed-chat
+            thread-id "Codex" directory)))
+      (my-files-agent-shell--rename-chat-buffer
+       buffer (my-files-agent-shell--codex-thread-title thread))
+      buffer)))
 
 (defun my-files-agent-shell--conversation-key-at-point ()
   "Return the stable key of the highlighted conversation."
@@ -2323,8 +2389,13 @@ All other text properties at POSITION are preserved."
          (session-id (plist-get entry :session-id))
          (agent-name (plist-get entry :agent))
          (directory (plist-get entry :project)))
-    (my-files-agent-shell--start-resumed-chat
-     session-id agent-name directory)))
+    (let ((buffer
+           (my-files-agent-shell--start-resumed-chat
+            session-id agent-name directory)))
+      (my-files-agent-shell--rename-chat-buffer
+       buffer (or (plist-get entry :full-title)
+                  (plist-get entry :title)))
+      buffer)))
 
 (defun my-files-agent-shell--new-chat (_button)
   "Start a new agent-shell chat for the selected project."
@@ -2377,6 +2448,7 @@ All other text properties at POSITION are preserved."
 
 (defun my-files-agent-shell--subscribe-chat (buffer)
   "Track BUFFER status in place and refresh when its row structure changes."
+  (my-files-agent-shell--sync-chat-buffer-name buffer)
   (with-current-buffer buffer
     (dolist (event my-files-agent-shell--chat-refresh-events)
       (unless (memq event my-files-agent-shell--subscribed-events)
@@ -2384,11 +2456,17 @@ All other text properties at POSITION are preserved."
          :shell-buffer buffer
          :event event
          :on-event
-         (if (memq event my-files-agent-shell--chat-status-events)
-             (lambda (_event)
-               (my-files-agent-shell--update-live-chat-status buffer))
+         (cond
+          ((memq event my-files-agent-shell--chat-status-events)
            (lambda (_event)
-             (my-files-agent-shell--schedule-refresh))))
+             (my-files-agent-shell--update-live-chat-status buffer)))
+          ((eq event 'session-title-changed)
+           (lambda (_event)
+             (my-files-agent-shell--sync-chat-buffer-name buffer)
+             (my-files-agent-shell--schedule-refresh)))
+          (t
+           (lambda (_event)
+             (my-files-agent-shell--schedule-refresh)))))
         (push event my-files-agent-shell--subscribed-events)))
     (add-hook 'kill-buffer-hook
               #'my-files-agent-shell--schedule-refresh nil t)))
@@ -2666,7 +2744,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
             (my-files-agent-shell--insert-empty
              (concat "SPC marks · U clears · m moves · a archives · "
                      "u restores · d deletes archived · i filters · "
-                     "▶ current · ● open buffer"))
+                     "v navigation · ▶ current · ● open buffer"))
             (when my-files-agent-shell--codex-error
               (my-files-agent-shell--insert-empty
                (format "Codex refresh failed: %s"
@@ -2869,103 +2947,48 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
               (forward-line 1))
             width))))))
 
-(defun my-files-agent-shell--desired-panel-widths ()
-  "Return preferred panel widths based on their visible text."
-  (cl-mapcar
-   (lambda (minimum name)
-     (max minimum
-          (1+ (my-files-agent-shell--panel-content-width
-               (get-buffer name)))))
-   (list my-files-agent-shell-area-width
-         my-files-agent-shell-project-width
-         my-files-agent-shell-chat-width)
-   (list my-files-agent-shell--area-buffer-name
-         my-files-agent-shell--project-buffer-name
-         my-files-agent-shell--chat-buffer-name)))
+(defun my-files-agent-shell--desired-chat-width ()
+  "Return the preferred Chats width based on its visible text."
+  (max my-files-agent-shell-chat-width
+       (min my-files-agent-shell-chat-content-maximum-width
+            (1+ (my-files-agent-shell--panel-content-width
+                 (get-buffer my-files-agent-shell--chat-buffer-name))))))
 
-(defun my-files-agent-shell--scaled-panel-widths
-    (total-width &optional requested-widths)
-  "Return three panel widths suitable for TOTAL-WIDTH.
+(defun my-files-agent-shell--scaled-chat-width
+    (total-width &optional requested-width)
+  "Return a Chats width suitable for TOTAL-WIDTH.
 
-REQUESTED-WIDTHS defaults to the three configured preferred widths.  The
-combined result never exceeds half of TOTAL-WIDTH.  Areas and Projects receive
-their requested space before the Conversations panel uses the remainder."
-  (let* ((requested
-          (mapcar
-           (lambda (width)
-             (max my-files-agent-shell-minimum-panel-width width))
-           (or requested-widths
-               (list my-files-agent-shell-area-width
-                     my-files-agent-shell-project-width
-                     my-files-agent-shell-chat-width))))
-         (available
-          (min (floor total-width 2)
-               (- total-width my-files-agent-shell-minimum-main-width)))
-         (minimum-total (* 3 my-files-agent-shell-minimum-panel-width))
-         (requested-total (apply #'+ requested)))
-    (when (< available minimum-total)
-      (user-error
-       "Frame is too narrow: need at least %d columns"
-       (+ minimum-total my-files-agent-shell-minimum-main-width)))
-    (cond
-     ((<= requested-total available)
-      requested)
-     ((<= (+ (nth 0 requested) (nth 1 requested))
-          (- available my-files-agent-shell-minimum-panel-width))
-      (list (nth 0 requested)
-            (nth 1 requested)
-            (- available (nth 0 requested) (nth 1 requested))))
-     (t
-      (let* ((priority-available
-              (- available my-files-agent-shell-minimum-panel-width))
-             (priority-extra
-              (- priority-available
-                 (* 2 my-files-agent-shell-minimum-panel-width)))
-             (area-extra
-              (- (nth 0 requested)
-                 my-files-agent-shell-minimum-panel-width))
-             (project-extra
-              (- (nth 1 requested)
-                 my-files-agent-shell-minimum-panel-width))
-             (requested-priority-extra
-              (max 1 (+ area-extra project-extra)))
-             (area-width
-              (+ my-files-agent-shell-minimum-panel-width
-                 (floor (* priority-extra area-extra)
-                        requested-priority-extra)))
-             (project-width
-              (+ my-files-agent-shell-minimum-panel-width
-                 (floor (* priority-extra project-extra)
-                        requested-priority-extra))))
-        ;; Keep Conversations at its minimum and use any rounding remainder
-        ;; for the prioritized Projects panel.
-        (setq project-width
-              (+ project-width
-                 (- priority-available area-width project-width)))
-        (list area-width project-width
-              my-files-agent-shell-minimum-panel-width))))))
+REQUESTED-WIDTH defaults to the configured, content-aware width.  The result
+never exceeds half of TOTAL-WIDTH and always reserves the configured minimum
+for the main conversation window."
+  (let ((minimum-total
+         (+ my-files-agent-shell-minimum-panel-width
+            my-files-agent-shell-minimum-main-width)))
+    (when (< total-width minimum-total)
+      (user-error "Frame is too narrow: need at least %d columns"
+                  minimum-total))
+    (max my-files-agent-shell-minimum-panel-width
+         (min (max my-files-agent-shell-minimum-panel-width
+                   (or requested-width
+                       (my-files-agent-shell--desired-chat-width)))
+              (floor total-width 2)
+              (- total-width my-files-agent-shell-minimum-main-width)))))
 
 (defun my-files-agent-shell--resize-panels-to-content ()
-  "Resize live browser panels to fit text within half the workspace."
+  "Resize the Chats column to fit text within half the workspace."
   (when (my-files-agent-shell--visible-p)
-    (let* ((windows (list my-files-agent-shell--area-window
-                          my-files-agent-shell--project-window
-                          my-files-agent-shell--chat-window
-                          my-files-agent-shell--main-window))
-           (total-width (apply #'+ (mapcar #'window-total-width windows)))
-           (widths
-            (my-files-agent-shell--scaled-panel-widths
-             total-width (my-files-agent-shell--desired-panel-widths)))
+    (let* ((total-width
+            (+ (window-total-width my-files-agent-shell--chat-window)
+               (window-total-width my-files-agent-shell--main-window)))
+           (width
+            (my-files-agent-shell--scaled-chat-width
+             total-width (my-files-agent-shell--desired-chat-width)))
+           (delta
+            (- width
+               (window-total-width my-files-agent-shell--chat-window)))
            (ignore-window-parameters t))
-      ;; The panel windows are nested from left to right.  Resizing in that
-      ;; order preserves earlier widths and takes any adjustment from main.
-      (cl-mapc
-       (lambda (window width)
-         (let ((delta (- width (window-total-width window))))
-           (unless (zerop delta)
-             (window-resize window delta t))))
-       (butlast windows)
-       widths))))
+      (unless (zerop delta)
+        (window-resize my-files-agent-shell--chat-window delta t)))))
 
 (defun my-files-agent-shell--prepare-panel-window (window buffer)
   "Display BUFFER in dedicated panel WINDOW."
@@ -2974,32 +2997,39 @@ their requested space before the Conversations panel uses the remainder."
   (set-window-parameter window 'no-delete-other-windows t)
   (set-window-parameter window 'my-files-agent-shell-panel t))
 
-;;;###autoload
-(defun my-files-agent-shell-open ()
-  "Open the Areas, Projects, Chats, and main chat workspace."
-  (interactive)
-  (if (my-files-agent-shell--visible-p)
-      (my-files-agent-shell--focus-window my-files-agent-shell--area-window)
-    (when my-files-agent-shell--saved-window-configuration
-      (my-files-agent-shell-close))
-    (let* ((main (selected-window))
-           (configuration (current-window-configuration))
-           widths
-           area-window project-window chat-window)
+(defun my-files-agent-shell--navigation-row-height ()
+  "Return a shallow height that fits above both persistent windows."
+  (let* ((available
+          (min (window-total-height my-files-agent-shell--chat-window)
+               (window-total-height my-files-agent-shell--main-window)))
+         (minimum (max 2 window-min-height))
+         (maximum (floor available 3)))
+    (when (< available (* 2 minimum))
+      (user-error "Frame is too short to show Areas and Projects"))
+    (max minimum
+         (min my-files-agent-shell-navigation-height maximum))))
+
+(defun my-files-agent-shell--show-navigation-panels ()
+  "Show Areas and Projects in a shallow row above the persistent windows."
+  (unless (my-files-agent-shell--visible-p)
+    (user-error "The My Files browser is not open"))
+  (when (and (not (my-files-agent-shell--navigation-visible-p))
+             (or (window-live-p my-files-agent-shell--area-window)
+                 (window-live-p my-files-agent-shell--project-window)))
+    (my-files-agent-shell--hide-navigation-panels))
+  (unless (my-files-agent-shell--navigation-visible-p)
+    (let ((height (my-files-agent-shell--navigation-row-height))
+          area-window project-window)
       (condition-case error-data
-          (progn
-            (let ((ignore-window-parameters t))
-              (delete-other-windows main))
-            (setq widths (my-files-agent-shell--scaled-panel-widths
-                          (window-total-width main)))
-            (setq area-window (split-window main (- (nth 0 widths)) 'left)
-                  project-window (split-window main (- (nth 1 widths)) 'left)
-                  chat-window (split-window main (- (nth 2 widths)) 'left))
-            (setq my-files-agent-shell--saved-window-configuration configuration
+          (let ((ignore-window-parameters t))
+            (setq area-window
+                  (split-window my-files-agent-shell--chat-window
+                                (- height) 'above)
+                  project-window
+                  (split-window my-files-agent-shell--main-window
+                                (- height) 'above)
                   my-files-agent-shell--area-window area-window
-                  my-files-agent-shell--project-window project-window
-                  my-files-agent-shell--chat-window chat-window
-                  my-files-agent-shell--main-window main)
+                  my-files-agent-shell--project-window project-window)
             (my-files-agent-shell--prepare-panel-window
              area-window
              (my-files-agent-shell--panel-buffer
@@ -3010,6 +3040,72 @@ their requested space before the Conversations panel uses the remainder."
              (my-files-agent-shell--panel-buffer
               my-files-agent-shell--project-buffer-name
               #'my-files-agent-shell-project-mode))
+            (my-files-agent-shell--update-panel-focus-faces))
+        (error
+         (let ((ignore-window-parameters t))
+           (when (window-live-p area-window)
+             (delete-window area-window))
+           (when (window-live-p project-window)
+             (delete-window project-window)))
+         (setq my-files-agent-shell--area-window nil
+               my-files-agent-shell--project-window nil)
+         (signal (car error-data) (cdr error-data)))))))
+
+(defun my-files-agent-shell--hide-navigation-panels ()
+  "Hide the optional Areas and Projects row."
+  (when (or (window-live-p my-files-agent-shell--area-window)
+            (window-live-p my-files-agent-shell--project-window))
+    (let ((navigation-selected
+           (memq (selected-window)
+                 (list my-files-agent-shell--area-window
+                       my-files-agent-shell--project-window)))
+          (ignore-window-parameters t))
+      (when navigation-selected
+        (select-window my-files-agent-shell--chat-window))
+      (when (window-live-p my-files-agent-shell--area-window)
+        (delete-window my-files-agent-shell--area-window))
+      (when (window-live-p my-files-agent-shell--project-window)
+        (delete-window my-files-agent-shell--project-window))
+      (setq my-files-agent-shell--area-window nil
+            my-files-agent-shell--project-window nil)
+      (when navigation-selected
+        (my-files-agent-shell-focus-chats)))))
+
+;;;###autoload
+(defun my-files-agent-shell-toggle-navigation-panels ()
+  "Toggle the shallow Areas and Projects row above the browser."
+  (interactive)
+  (unless (my-files-agent-shell--visible-p)
+    (my-files-agent-shell-open))
+  (if (my-files-agent-shell--navigation-visible-p)
+      (my-files-agent-shell--hide-navigation-panels)
+    (my-files-agent-shell--show-navigation-panels)))
+
+;;;###autoload
+(defun my-files-agent-shell-open ()
+  "Open the Chats and main conversation workspace."
+  (interactive)
+  (if (my-files-agent-shell--visible-p)
+      (my-files-agent-shell-focus-chats)
+    (when my-files-agent-shell--saved-window-configuration
+      (my-files-agent-shell-close))
+    (let* ((main (selected-window))
+           (configuration (current-window-configuration))
+           chat-width chat-window)
+      (condition-case error-data
+          (progn
+            (let ((ignore-window-parameters t))
+              (delete-other-windows main))
+            (setq chat-width
+                  (my-files-agent-shell--scaled-chat-width
+                   (window-total-width main))
+                  chat-window
+                  (split-window main (- chat-width) 'left))
+            (setq my-files-agent-shell--saved-window-configuration configuration
+                  my-files-agent-shell--area-window nil
+                  my-files-agent-shell--project-window nil
+                  my-files-agent-shell--chat-window chat-window
+                  my-files-agent-shell--main-window main)
             (my-files-agent-shell--prepare-panel-window
              chat-window
              (my-files-agent-shell--panel-buffer
@@ -3023,7 +3119,7 @@ their requested space before the Conversations panel uses the remainder."
                       #'my-files-agent-shell--window-buffer-changed)
             (my-files-agent-shell-refresh)
             (my-files-agent-shell--start-codex-refresh-timer)
-            (my-files-agent-shell-focus-areas))
+            (my-files-agent-shell-focus-chats))
         (error
          (remove-hook 'buffer-list-update-hook
                       #'my-files-agent-shell--buffer-list-updated)

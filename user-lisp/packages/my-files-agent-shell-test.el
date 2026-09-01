@@ -785,42 +785,31 @@
         (when (buffer-live-p chat)
           (kill-buffer chat))))))
 
-(ert-deftest my-files-agent-shell-scales-panels-to-preserve-main-window ()
-  (let ((my-files-agent-shell-area-width 20)
-        (my-files-agent-shell-project-width 30)
-        (my-files-agent-shell-chat-width 400)
+(ert-deftest my-files-agent-shell-scales-chat-list-to-preserve-main-window ()
+  (let ((my-files-agent-shell-chat-width 400)
         (my-files-agent-shell-minimum-panel-width 10)
         (my-files-agent-shell-minimum-main-width 40))
-    (should
-     (equal (my-files-agent-shell--scaled-panel-widths
-             150 '(12 14 16))
-            '(12 14 16)))
-    (let ((scaled (my-files-agent-shell--scaled-panel-widths 150)))
-      (should (equal scaled '(20 30 25))))
-    (let ((scaled (my-files-agent-shell--scaled-panel-widths 100)))
-      (should (equal scaled '(16 24 10))))))
+    (should (= (my-files-agent-shell--scaled-chat-width 150 16) 16))
+    (should (= (my-files-agent-shell--scaled-chat-width 150) 75))
+    (should (= (my-files-agent-shell--scaled-chat-width 100) 50))
+    (should-error (my-files-agent-shell--scaled-chat-width 49)
+                  :type 'user-error)))
 
-(ert-deftest my-files-agent-shell-sizes-panels-from-visible-text ()
-  (let* ((area-name " *My Files Width Test Areas*")
-         (project-name " *My Files Width Test Projects*")
-         (chat-name " *My Files Width Test Chats*")
-         (my-files-agent-shell--area-buffer-name area-name)
-         (my-files-agent-shell--project-buffer-name project-name)
+(ert-deftest my-files-agent-shell-sizes-chat-list-from-visible-text ()
+  (let* ((chat-name " *My Files Width Test Chats*")
          (my-files-agent-shell--chat-buffer-name chat-name)
-         (my-files-agent-shell-area-width 5)
-         (my-files-agent-shell-project-width 5)
-         (my-files-agent-shell-chat-width 5))
+         (my-files-agent-shell-chat-width 5)
+         (my-files-agent-shell-chat-content-maximum-width 48))
     (unwind-protect
         (progn
-          (with-current-buffer (get-buffer-create area-name)
-            (insert "1234567890"))
-          (with-current-buffer (get-buffer-create project-name)
-            (insert "123456789012345"))
           (with-current-buffer (get-buffer-create chat-name)
             (insert "12345678901234567890"))
-          (should (equal (my-files-agent-shell--desired-panel-widths)
-                         '(11 16 21))))
-      (mapc #'kill-buffer (list area-name project-name chat-name)))))
+          (should (= (my-files-agent-shell--desired-chat-width) 21))
+          (with-current-buffer chat-name
+            (erase-buffer)
+            (insert (make-string 100 ?x)))
+          (should (= (my-files-agent-shell--desired-chat-width) 48)))
+      (kill-buffer chat-name))))
 
 (ert-deftest my-files-agent-shell-requires-compatible-shell-maker ()
   (should (fboundp 'shell-maker-start-v2)))
@@ -830,6 +819,7 @@
                      ("C-p" . my-files-agent-shell-previous-item)
                      ("C-f" . my-files-agent-shell-next-panel)
                      ("C-b" . my-files-agent-shell-previous-panel)
+                     ("v" . my-files-agent-shell-toggle-navigation-panels)
                      ("SPC" . my-files-agent-shell-toggle-mark-at-point)
                      ("i" . my-files-agent-shell-toggle-in-progress-filter)
                      ("a" . my-files-agent-shell-archive-at-point)
@@ -897,11 +887,12 @@
     (my-files-agent-shell-mode)
     (should-not window-size-fixed)))
 
-(ert-deftest my-files-agent-shell-keyboard-navigation-crosses-columns ()
+(ert-deftest my-files-agent-shell-toggles-shallow-navigation-row ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((area (expand-file-name "Work" root))
            (project (file-name-as-directory
                      (expand-file-name "Project" area)))
+           (my-files-agent-shell-navigation-height 7)
            (configuration (current-window-configuration)))
       (make-directory project t)
       (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
@@ -914,16 +905,39 @@
                   my-files-agent-shell--selected-project nil)
             (my-files-agent-shell-open)
             (should (eq (selected-window)
+                        my-files-agent-shell--chat-window))
+            (should-not
+             (my-files-agent-shell--navigation-visible-p))
+            (should (= (length (window-list)) 2))
+            (let* ((total (+ (window-total-width
+                              my-files-agent-shell--chat-window)
+                             (window-total-width
+                              my-files-agent-shell--main-window)))
+                   (chat-width
+                    (window-total-width my-files-agent-shell--chat-window)))
+              (should (<= chat-width (floor total 2))))
+            (my-files-agent-shell-toggle-navigation-panels)
+            (should (my-files-agent-shell--navigation-visible-p))
+            (should (= (length (window-list)) 4))
+            (should
+             (<= (window-total-height my-files-agent-shell--area-window)
+                 my-files-agent-shell-navigation-height))
+            (should
+             (= (window-total-height my-files-agent-shell--area-window)
+                (window-total-height
+                 my-files-agent-shell--project-window)))
+            (should
+             (= (car (window-edges my-files-agent-shell--area-window))
+                (car (window-edges my-files-agent-shell--chat-window))))
+            (should
+             (= (car (window-edges my-files-agent-shell--project-window))
+                (car (window-edges my-files-agent-shell--main-window))))
+            (should
+             (< (cadr (window-edges my-files-agent-shell--area-window))
+                (cadr (window-edges my-files-agent-shell--chat-window))))
+            (my-files-agent-shell-focus-areas)
+            (should (eq (selected-window)
                         my-files-agent-shell--area-window))
-            (let* ((windows (list my-files-agent-shell--area-window
-                                  my-files-agent-shell--project-window
-                                  my-files-agent-shell--chat-window
-                                  my-files-agent-shell--main-window))
-                   (total (apply #'+ (mapcar #'window-total-width windows)))
-                   (panels (apply #'+
-                                  (mapcar #'window-total-width
-                                          (butlast windows)))))
-              (should (<= panels (floor total 2))))
             (with-current-buffer my-files-agent-shell--area-buffer-name
               (should
                (eq (button-get
@@ -964,7 +978,15 @@
                         my-files-agent-shell--main-window))
             (my-files-agent-shell-previous-panel)
             (should (eq (selected-window)
-                        my-files-agent-shell--chat-window)))
+                        my-files-agent-shell--chat-window))
+            (my-files-agent-shell-toggle-navigation-panels)
+            (should-not
+             (my-files-agent-shell--navigation-visible-p))
+            (should (= (length (window-list)) 2))
+            (my-files-agent-shell-focus-projects)
+            (should (my-files-agent-shell--navigation-visible-p))
+            (should (eq (selected-window)
+                        my-files-agent-shell--project-window)))
         (when (my-files-agent-shell--visible-p)
           (my-files-agent-shell-close))
         (set-window-configuration configuration)))))
@@ -1049,7 +1071,9 @@
           (should (= (length (window-list)) 1))
           (should
            (eq (window-buffer my-files-agent-shell--main-window)
-               resumed-chat)))
+               resumed-chat))
+          (should (equal (buffer-name resumed-chat)
+                         "Resume in Agent Shell")))
       (mapc #'kill-buffer (list resumed-chat placeholder))
       (delete-directory project t))
     (should (equal resumed-id "codex-session-id"))
@@ -1442,6 +1466,41 @@
                     (button-get (button-at (point))
                                 'my-files-agent-shell-conversation-key)
                     "agent:status-only"))))))
+        (kill-buffer chat)))))
+
+(ert-deftest my-files-agent-shell-renames-live-buffer-from-codex-title ()
+  (let ((chat (generate-new-buffer "Codex Agent @ Project"))
+        subscriptions
+        (refresh-count 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local agent-shell--state
+                        '(:session (:id "named-session"
+                                    :title "Codex generated title"))))
+          (cl-letf (((symbol-function 'agent-shell-subscribe-to)
+                     (lambda (&rest arguments)
+                       (push (cons (plist-get arguments :event)
+                                   (plist-get arguments :on-event))
+                             subscriptions)))
+                    ((symbol-function 'shell-maker-set-buffer-name)
+                     (lambda (buffer title)
+                       (with-current-buffer buffer
+                         (rename-buffer title t))))
+                    ((symbol-function
+                      'my-files-agent-shell--schedule-refresh)
+                     (lambda (&rest _arguments)
+                       (cl-incf refresh-count))))
+            (my-files-agent-shell--subscribe-chat chat)
+            (should (equal (buffer-name chat) "Codex generated title"))
+            (with-current-buffer chat
+              (map-put! (map-elt agent-shell--state :session)
+                        :title "Refined Codex title"))
+            (funcall (alist-get 'session-title-changed subscriptions)
+                     '((:event . session-title-changed)))
+            (should (equal (buffer-name chat) "Refined Codex title"))
+            (should (= refresh-count 1))))
+      (when (buffer-live-p chat)
         (kill-buffer chat)))))
 
 (ert-deftest my-files-agent-shell-codex-poll-updates-only-status-brackets ()
