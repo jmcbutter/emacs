@@ -1788,7 +1788,7 @@
                          window 'my-files-agent-shell-chat-column)))
         (kill-buffer buffer)))))
 
-(ert-deftest my-files-agent-shell-chat-style-right-aligns-submitted-user-turns ()
+(ert-deftest my-files-agent-shell-chat-style-left-aligns-and-distinguishes-user-turns ()
   (with-temp-buffer
     (insert "Short message")
     (let* ((input (make-overlay (point-min) (point-max)))
@@ -1796,11 +1796,12 @@
            (label-text
             (propertize " Me " 'face 'agent-shell-chat-me-label)))
       (overlay-put input 'category 'agent-shell-chat-me-input)
+      (overlay-put input 'line-prefix agent-shell-chat--body-indent)
+      (overlay-put input 'wrap-prefix agent-shell-chat--body-indent)
       (overlay-put label 'category 'agent-shell-chat-me-label)
       (overlay-put label 'before-string (concat "\n" label-text "\n"))
       (setq-local my-files-agent-shell-chat-style-mode t)
-      (let ((my-files-agent-shell-chat-message-width 80))
-        (my-files-agent-shell--style-chat-overlays))
+      (my-files-agent-shell--style-chat-overlays)
       (let* ((prefix (overlay-get input 'line-prefix))
              (styled-label (overlay-get label 'before-string))
              (label-start (text-property-any
@@ -1809,15 +1810,12 @@
                            styled-label)))
         (should (eq (overlay-get input 'face)
                     'my-files-agent-shell-user-message))
-        (should
-         (equal (get-text-property 0 'display prefix)
-                '(space :align-to (- right-fringe 13))))
+        (should (equal (substring-no-properties prefix) "│ "))
+        (should-not (get-text-property 0 'display prefix))
         (should label-start)
-        (should
-         (equal
-          (get-text-property
-           label-start 'line-prefix styled-label)
-          prefix))))))
+        (should-not
+         (get-text-property
+          label-start 'line-prefix styled-label))))))
 
 (ert-deftest my-files-agent-shell-chat-style-collapses-and-separates-activity ()
   (with-temp-buffer

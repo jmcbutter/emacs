@@ -25,8 +25,8 @@
 ;; Pressing i limits the Areas and Projects panels to scopes that contain an
 ;; active conversation in the In Progress workflow stage.
 ;; Agent conversations use a centered, fixed-width column: agent replies stay
-;; left-aligned, submitted user turns sit against the right edge, and activity
-;; such as thoughts and edits starts collapsed behind a compact separator.
+;; left-aligned, submitted user turns use a tinted block and accent gutter, and
+;; activity such as thoughts and edits starts collapsed behind a compact rule.
 ;; A leading `▶' identifies the conversation in the main window, `●' marks
 ;; conversations with open buffers, and `*' marks conversations selected for a
 ;; batch workflow action.  Space toggles a mark and U clears all marks.  Delete
@@ -136,8 +136,8 @@ of the conversation to confirm that the correct session was restored."
   "Maximum width, in columns, of user and agent messages.
 
 The conversation column is centered when its window is wider than this.
-Submitted user turns align to its right edge and agent turns to its left edge.
-Set this to 120 for a wider transcript."
+Both user and agent turns are left-aligned.  Set this to 120 for a wider
+transcript."
   :type '(integer :tag "Columns")
   :safe (lambda (value) (and (integerp value) (> value 0)))
   :group 'my-files-agent-shell)
@@ -177,7 +177,16 @@ Set this to 120 for a wider transcript."
   '((((class color) (background light)) :background "gray94")
     (((class color) (background dark)) :background "gray20")
     (t :inherit highlight))
-  "Face used for right-aligned submitted user messages."
+  "Face used to distinguish submitted user messages from agent replies."
+  :group 'my-files-agent-shell)
+
+(defface my-files-agent-shell-user-message-accent
+  '((((class color) (background light))
+     :foreground "RoyalBlue4" :weight bold)
+    (((class color) (background dark))
+     :foreground "LightSkyBlue" :weight bold)
+    (t :inherit font-lock-keyword-face :weight bold))
+  "Face used for the left gutter beside submitted user messages."
   :group 'my-files-agent-shell)
 
 (defface my-files-agent-shell-activity-separator
@@ -363,113 +372,25 @@ that existed before this package changed them."
                   ((eq (plist-get state :buffer) (current-buffer))))
         (my-files-agent-shell--restore-chat-window-margins window)))))
 
-(defun my-files-agent-shell--message-display-width (start end)
-  "Return the visible bubble width for the message from START to END."
-  (let ((widest 1))
-    (dolist (line
-             (split-string
-              (buffer-substring-no-properties start end) "\n" nil))
-      (setq widest (max widest (string-width line))))
-    (min widest (max 1 my-files-agent-shell-chat-message-width))))
-
-(defun my-files-agent-shell--right-alignment-prefix (width)
-  "Return a display prefix whose content starts WIDTH columns from the right."
-  (propertize
-   " " 'display `(space :align-to (- right-fringe ,width))))
-
-(defun my-files-agent-shell--face-run-start (string face)
-  "Return the first position in STRING whose `face' includes FACE."
-  (let ((position 0)
-        found)
-    (while (and (< position (length string)) (not found))
-      (let ((value (get-text-property position 'face string)))
-        (when (or (eq value face)
-                  (and (listp value) (memq face value)))
-          (setq found position)))
-      (unless found
-        (setq position
-              (or (next-single-property-change
-                   position 'face string (length string))
-                  (length string)))))
-    found))
-
 (defun my-files-agent-shell--chat-overlay-p (overlay category)
   "Return non-nil when OVERLAY belongs to chat CATEGORY."
   (eq (overlay-get overlay 'category) category))
 
-(defun my-files-agent-shell--style-chat-label (overlay prefix)
-  "Apply PREFIX to the user label carried by OVERLAY."
-  (when-let* ((before (overlay-get overlay 'before-string))
-              ((stringp before))
-              (start
-               (my-files-agent-shell--face-run-start
-                before 'agent-shell-chat-me-label)))
-    (let* ((styled (copy-sequence before))
-           (end (or (next-single-property-change
-                     start 'face styled (length styled))
-                    (length styled))))
-      (add-text-properties
-       start end `(line-prefix ,prefix wrap-prefix ,prefix) styled)
-      (overlay-put overlay 'before-string styled))))
-
-(defun my-files-agent-shell--preceding-user-label (labels input)
-  "Return the closest member of LABELS preceding INPUT."
-  (seq-reduce
-   (lambda (closest candidate)
-     (if (and (<= (overlay-end candidate) (overlay-start input))
-              (or (not closest)
-                  (> (overlay-end candidate) (overlay-end closest))))
-         candidate
-       closest))
-   labels nil))
+(defun my-files-agent-shell--user-message-prefix ()
+  "Return the left gutter used to distinguish a submitted user turn."
+  (propertize "│ " 'face 'my-files-agent-shell-user-message-accent))
 
 (defun my-files-agent-shell--style-chat-overlays ()
-  "Right-align existing submitted user turns in the current chat buffer."
+  "Style existing submitted user turns in the current chat buffer."
   (when my-files-agent-shell-chat-style-mode
-    (let* ((overlays (overlays-in (point-min) (point-max)))
-           (inputs
-            (seq-filter
-             (lambda (overlay)
-               (my-files-agent-shell--chat-overlay-p
-                overlay 'agent-shell-chat-me-input))
-             overlays))
-           (labels
-            (seq-filter
-             (lambda (overlay)
-               (and (memq (overlay-get overlay 'category)
-                          '(agent-shell-chat-me-label
-                            agent-shell-chat-me))
-                    (stringp (overlay-get overlay 'before-string))
-                    (my-files-agent-shell--face-run-start
-                     (overlay-get overlay 'before-string)
-                     'agent-shell-chat-me-label)))
-             overlays)))
-      (dolist (input inputs)
-        (let* ((cached
-                (overlay-get input
-                             'my-files-agent-shell-message-width))
-               (width
-                (if (and (consp cached)
-                         (= (car cached)
-                            my-files-agent-shell-chat-message-width))
-                    (cdr cached)
-                  (let ((computed
-                         (my-files-agent-shell--message-display-width
-                          (overlay-start input) (overlay-end input))))
-                    (overlay-put
-                     input 'my-files-agent-shell-message-width
-                     (cons my-files-agent-shell-chat-message-width computed))
-                    computed)))
-               (prefix
-                (my-files-agent-shell--right-alignment-prefix width))
-               (label
-                (my-files-agent-shell--preceding-user-label
-                 labels input)))
+    (let ((prefix (my-files-agent-shell--user-message-prefix)))
+      (dolist (input (overlays-in (point-min) (point-max)))
+        (when (my-files-agent-shell--chat-overlay-p
+               input 'agent-shell-chat-me-input)
           (overlay-put input 'line-prefix prefix)
           (overlay-put input 'wrap-prefix prefix)
-          (overlay-put input 'face 'my-files-agent-shell-user-message)
-          (when label
-            (my-files-agent-shell--style-chat-label label prefix)))))))
+          (overlay-put input 'face
+                       'my-files-agent-shell-user-message))))))
 
 (defun my-files-agent-shell--activity-id-p (identifier)
   "Return non-nil when IDENTIFIER names an Agent Shell activity group."
@@ -632,7 +553,7 @@ that existed before this package changed them."
     (agent-shell-chat--relabel)))
 
 (define-minor-mode my-files-agent-shell-chat-style-mode
-  "Use a compact, left/right-aligned conversation layout."
+  "Use a compact, visually separated conversation layout."
   :lighter nil
   :group 'my-files-agent-shell
   (cond
@@ -3165,7 +3086,11 @@ their requested space before the Conversations panel uses the remainder."
 (when my-files-agent-shell-chat-style-enabled
   (dolist (buffer (agent-shell-buffers))
     (with-current-buffer buffer
-      (unless my-files-agent-shell-chat-style-mode
+      (if my-files-agent-shell-chat-style-mode
+          ;; Rebuild labels when upgrading a live buffer from an older style.
+          ;; This removes any display properties the previous implementation
+          ;; placed on `Me' before applying the current user-message gutter.
+          (agent-shell-chat--relabel)
         (my-files-agent-shell-chat-style-mode 1)))))
 
 (provide 'my-files-agent-shell)
