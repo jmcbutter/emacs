@@ -866,7 +866,7 @@ changes made before live and cached representations were coalesced."
   "Base mode for My Files browser panels."
   (setq-local truncate-lines t
               cursor-type nil
-              mode-line-format nil
+              mode-line-format '(" " mode-name " ")
               hl-line-sticky-flag t
               hl-line-face 'my-files-agent-shell-cursor-inactive)
   (hl-line-mode 1)

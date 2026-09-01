@@ -845,6 +845,15 @@
     (should hl-line-sticky-flag)
     (should (eq hl-line-face 'my-files-agent-shell-cursor-inactive))))
 
+(ert-deftest my-files-agent-shell-panels-have-labeled-modelines ()
+  (dolist (spec '((my-files-agent-shell-area-mode . "Areas")
+                  (my-files-agent-shell-project-mode . "Projects")
+                  (my-files-agent-shell-chat-mode . "Agent Chats")))
+    (with-temp-buffer
+      (funcall (car spec))
+      (should (equal mode-name (cdr spec)))
+      (should (equal mode-line-format '(" " mode-name " "))))))
+
 (ert-deftest my-files-agent-shell-restores-highlighted-chat-with-u ()
   (my-files-agent-shell-test--with-state
       ((my-files-agent-shell--selected-project default-directory)
