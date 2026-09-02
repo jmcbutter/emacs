@@ -3135,18 +3135,18 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                (my-files-agent-shell-refresh)))))))
 
 (defun my-files-agent-shell--start-codex-refresh-timer ()
-  "Schedule one Codex task refresh after Emacs becomes idle."
+  "Schedule one Codex task refresh after the configured interval."
   (when (timerp my-files-agent-shell--codex-refresh-timer)
     (cancel-timer my-files-agent-shell--codex-refresh-timer))
   (setq my-files-agent-shell--codex-refresh-timer nil)
   (when (my-files-agent-shell--visible-p)
     (setq my-files-agent-shell--codex-refresh-timer
-          (run-with-idle-timer
+          (run-at-time
            my-files-agent-shell-codex-refresh-interval nil
            (lambda ()
              (setq my-files-agent-shell--codex-refresh-timer nil)
              (when (my-files-agent-shell--visible-p)
-               (my-files-agent-shell--refresh-codex-threads t)))))))
+               (my-files-agent-shell--refresh-codex-threads)))))))
 
 (defun my-files-agent-shell--visible-line-width ()
   "Return the display width of visible text on the current line."
