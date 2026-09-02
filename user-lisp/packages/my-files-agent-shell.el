@@ -13,11 +13,6 @@
 ;;
 ;;   Agent chats | Main chat
 ;;
-;; Press v to reveal a shallow navigation row above it:
-;;
-;;   Areas      | Projects
-;;   Agent chats | Main chat
-;;
 ;; Areas are immediate children of `my-files-agent-shell-root-directory'
 ;; containing `.area.toml'.  Projects are descendants of the selected area
 ;; containing `.project.toml'.  The chat panel combines live `agent-shell'
@@ -27,8 +22,10 @@
 ;; In Progress, Review, Staged, or Completed.  Archiving is a non-destructive
 ;; browser classification that leaves the conversation only under Archived.
 ;; Runtime status remains visible on each row but never changes workflow stage.
-;; Pressing i limits the Areas and Projects panels to scopes that contain an
-;; active conversation in the In Progress workflow stage.
+;; Press 1 or 2 to choose an area or project through minibuffer completion;
+;; v chooses both.  The Agent Chats header line exposes the same selectors as
+;; mouse-accessible controls.  Pressing i limits those selectors to scopes that
+;; contain a conversation in the In Progress workflow stage.
 ;; Codex-generated session titles name both live chat rows and their Emacs
 ;; buffers.  Agent conversations use a centered, fixed-width column: replies
 ;; stay left-aligned, submitted user turns use a tinted block and accent gutter,
@@ -97,11 +94,6 @@ discovery quick."
 
 An explicitly configured `my-files-agent-shell-chat-width' can still exceed
 this value."
-  :type 'natnum
-  :group 'my-files-agent-shell)
-
-(defcustom my-files-agent-shell-navigation-height 8
-  "Maximum height, in lines, of the Areas and Projects row."
   :type 'natnum
   :group 'my-files-agent-shell)
 
@@ -216,12 +208,8 @@ transcript."
   "Face used to extend an activity separator to the column edge."
   :group 'my-files-agent-shell)
 
-(defconst my-files-agent-shell--area-buffer-name " *My Files Areas*")
-(defconst my-files-agent-shell--project-buffer-name " *My Files Projects*")
 (defconst my-files-agent-shell--chat-buffer-name " *My Files Agent Chats*")
 
-(defvar my-files-agent-shell--area-window nil)
-(defvar my-files-agent-shell--project-window nil)
 (defvar my-files-agent-shell--chat-window nil)
 (defvar my-files-agent-shell--main-window nil)
 (defvar my-files-agent-shell--saved-window-configuration nil)
@@ -237,6 +225,8 @@ transcript."
 (defvar my-files-agent-shell--codex-last-refresh-time nil)
 (defvar my-files-agent-shell--known-chat-buffers nil)
 (defvar my-files-agent-shell--in-progress-only nil)
+(defvar my-files-agent-shell--available-areas nil)
+(defvar my-files-agent-shell--available-projects nil)
 (defvar my-files-agent-shell--conversation-states
   (make-hash-table :test #'equal))
 (defvar my-files-agent-shell--conversation-states-loaded nil)
@@ -249,7 +239,6 @@ transcript."
 (defvar-local my-files-agent-shell--collapsed-chat-sections nil)
 (defvar-local my-files-agent-shell--assigned-project nil)
 (defvar-local my-files-agent-shell--highlighted-button-key nil)
-(defvar-local my-files-agent-shell--selected-path-button nil)
 (defvar-local my-files-agent-shell--marked-conversation-keys nil)
 (defvar-local my-files-agent-shell--pending-selection-key nil)
 (defvar-local my-files-agent-shell-chat-style-mode nil)
@@ -833,11 +822,11 @@ changes made before live and cached representations were coalesced."
   "<right>" #'my-files-agent-shell-next-panel
   "C-b" #'my-files-agent-shell-previous-panel
   "<left>" #'my-files-agent-shell-previous-panel
-  "1" #'my-files-agent-shell-focus-areas
-  "2" #'my-files-agent-shell-focus-projects
+  "1" #'my-files-agent-shell-select-area
+  "2" #'my-files-agent-shell-select-project
   "3" #'my-files-agent-shell-focus-chats
   "4" #'my-files-agent-shell-focus-main
-  "v" #'my-files-agent-shell-toggle-navigation-panels
+  "v" #'my-files-agent-shell-select-scope
   "SPC" #'my-files-agent-shell-toggle-mark-at-point
   "i" #'my-files-agent-shell-toggle-in-progress-filter
   "a" #'my-files-agent-shell-archive-at-point
@@ -848,6 +837,18 @@ changes made before live and cached representations were coalesced."
   "RET" #'push-button
   "g" #'my-files-agent-shell-refresh
   "q" #'my-files-agent-shell-close)
+
+(defvar-keymap my-files-agent-shell--area-toolbar-map
+  :doc "Mouse map for the Agent Chats area selector."
+  "<header-line> <mouse-1>" #'my-files-agent-shell-select-area)
+
+(defvar-keymap my-files-agent-shell--project-toolbar-map
+  :doc "Mouse map for the Agent Chats project selector."
+  "<header-line> <mouse-1>" #'my-files-agent-shell-select-project)
+
+(defvar-keymap my-files-agent-shell--filter-toolbar-map
+  :doc "Mouse map for the Agent Chats In Progress filter."
+  "<header-line> <mouse-1>" #'my-files-agent-shell-toggle-in-progress-filter)
 
 (defun my-files-agent-shell--highlighted-conversation-title (&optional frame)
   "Return the selected conversation title in FRAME, or nil."
@@ -890,17 +891,11 @@ changes made before live and cached representations were coalesced."
   (add-hook 'post-command-hook
             #'my-files-agent-shell--remember-panel-selection nil t))
 
-(define-derived-mode my-files-agent-shell-area-mode
-  my-files-agent-shell-mode "Areas"
-  "Mode for the My Files area panel.")
-
-(define-derived-mode my-files-agent-shell-project-mode
-  my-files-agent-shell-mode "Projects"
-  "Mode for the My Files project panel.")
-
 (define-derived-mode my-files-agent-shell-chat-mode
   my-files-agent-shell-mode "Agent Chats"
   "Mode for the My Files agent-shell chat panel."
+  (setq-local header-line-format
+              '(:eval (my-files-agent-shell--scope-toolbar)))
   (add-hook 'post-command-hook
             #'my-files-agent-shell--update-conversation-echo nil t))
 
@@ -922,8 +917,6 @@ changes made before live and cached representations were coalesced."
     (list 'conversation
           (button-get button 'my-files-agent-shell-conversation-key)
           (button-get button 'my-files-agent-shell-section)))
-   ((button-get button 'my-files-agent-shell-path)
-    (list 'path (button-get button 'my-files-agent-shell-path)))
    ((button-get button 'my-files-agent-shell-buffer)
     (list 'buffer (button-get button 'my-files-agent-shell-buffer)))
    ((button-get button 'my-files-agent-shell-entry)
@@ -1041,9 +1034,7 @@ changes made before live and cached representations were coalesced."
 (defun my-files-agent-shell--update-panel-focus-faces (&optional frame)
   "Update active and inactive panel faces for FRAME."
   (let ((selected (frame-selected-window (or frame (selected-frame)))))
-    (dolist (window (list my-files-agent-shell--area-window
-                          my-files-agent-shell--project-window
-                          my-files-agent-shell--chat-window))
+    (dolist (window (list my-files-agent-shell--chat-window))
       (when (window-live-p window)
         (with-current-buffer (window-buffer window)
           (let ((active (eq window selected))
@@ -1053,13 +1044,7 @@ changes made before live and cached representations were coalesced."
                             'hl-line
                           'my-files-agent-shell-cursor-inactive))
             (when (overlayp hl-line-overlay)
-              (overlay-put hl-line-overlay 'face hl-line-face))
-            (when my-files-agent-shell--selected-path-button
-              (button-put
-               my-files-agent-shell--selected-path-button 'face
-               (if active
-                   'my-files-agent-shell-selected
-                 'my-files-agent-shell-selected-inactive)))))))
+              (overlay-put hl-line-overlay 'face hl-line-face))))))
     (my-files-agent-shell--update-conversation-echo frame)))
 
 (defun my-files-agent-shell--focus-window (window)
@@ -1090,18 +1075,14 @@ changes made before live and cached representations were coalesced."
   (my-files-agent-shell-focus-chats))
 
 (defun my-files-agent-shell-focus-areas ()
-  "Reveal the navigation row and focus the Areas panel."
+  "Choose an area through minibuffer completion."
   (interactive)
-  (unless (my-files-agent-shell--navigation-visible-p)
-    (my-files-agent-shell--show-navigation-panels))
-  (my-files-agent-shell--focus-window my-files-agent-shell--area-window))
+  (my-files-agent-shell-select-area))
 
 (defun my-files-agent-shell-focus-projects ()
-  "Reveal the navigation row and focus the Projects panel."
+  "Choose a project through minibuffer completion."
   (interactive)
-  (unless (my-files-agent-shell--navigation-visible-p)
-    (my-files-agent-shell--show-navigation-panels))
-  (my-files-agent-shell--focus-window my-files-agent-shell--project-window))
+  (my-files-agent-shell-select-project))
 
 (defun my-files-agent-shell-focus-chats ()
   "Focus the Chats panel."
@@ -1114,39 +1095,23 @@ changes made before live and cached representations were coalesced."
   (my-files-agent-shell--focus-window my-files-agent-shell--main-window))
 
 (defun my-files-agent-shell-next-panel ()
-  "Move focus through visible panels, wrapping after the main window."
+  "Move focus between Chats and the main window."
   (interactive)
   (my-files-agent-shell--focus-window
-   (cond
-    ((and (my-files-agent-shell--navigation-visible-p)
-          (eq (selected-window) my-files-agent-shell--area-window))
-     my-files-agent-shell--project-window)
-    ((and (my-files-agent-shell--navigation-visible-p)
-          (eq (selected-window) my-files-agent-shell--project-window))
-     my-files-agent-shell--chat-window)
-    ((eq (selected-window) my-files-agent-shell--chat-window)
-     my-files-agent-shell--main-window)
-    ((my-files-agent-shell--navigation-visible-p)
-     my-files-agent-shell--area-window)
-    (t my-files-agent-shell--chat-window))))
+   (if (eq (selected-window) my-files-agent-shell--chat-window)
+       my-files-agent-shell--main-window
+     my-files-agent-shell--chat-window)))
 
 (defun my-files-agent-shell-previous-panel ()
-  "Move focus backward through visible panels, wrapping at the start."
+  "Move focus backward between the main window and Chats."
   (interactive)
   (my-files-agent-shell--focus-window
-   (cond
-    ((eq (selected-window) my-files-agent-shell--main-window)
-     my-files-agent-shell--chat-window)
-    ((and (my-files-agent-shell--navigation-visible-p)
-          (eq (selected-window) my-files-agent-shell--chat-window))
-     my-files-agent-shell--project-window)
-    ((and (my-files-agent-shell--navigation-visible-p)
-          (eq (selected-window) my-files-agent-shell--project-window))
-     my-files-agent-shell--area-window)
-    (t my-files-agent-shell--main-window))))
+   (if (eq (selected-window) my-files-agent-shell--main-window)
+       my-files-agent-shell--chat-window
+     my-files-agent-shell--main-window)))
 
 (defun my-files-agent-shell-toggle-in-progress-filter ()
-  "Toggle whether Areas and Projects show only scopes with In Progress chats."
+  "Toggle whether scope selectors show only places with In Progress chats."
   (interactive)
   (setq my-files-agent-shell--in-progress-only
         (not my-files-agent-shell--in-progress-only))
@@ -1738,11 +1703,6 @@ When FORCE is non-nil, ignore the normal refresh interval."
   (and (window-live-p my-files-agent-shell--chat-window)
        (window-live-p my-files-agent-shell--main-window)))
 
-(defun my-files-agent-shell--navigation-visible-p ()
-  "Return non-nil when both optional navigation windows are live."
-  (and (window-live-p my-files-agent-shell--area-window)
-       (window-live-p my-files-agent-shell--project-window)))
-
 (defun my-files-agent-shell--panel-buffer (name mode)
   "Return panel buffer NAME initialized with MODE."
   (let ((buffer (get-buffer-create name)))
@@ -1761,38 +1721,124 @@ When FORCE is non-nil, ignore the normal refresh interval."
   (insert (propertize (concat " " text "\n")
                       'face 'my-files-agent-shell-muted)))
 
-(defun my-files-agent-shell--insert-path-button
-    (label path selected action &optional help)
-  "Insert a LABEL button for PATH invoking ACTION.
+(defun my-files-agent-shell--project-label (project)
+  "Return PROJECT's label relative to the selected area."
+  (if my-files-agent-shell--selected-area
+      (directory-file-name
+       (file-relative-name project my-files-agent-shell--selected-area))
+    (my-files-agent-shell--path-name project)))
 
-SELECTED controls the row face.  HELP, when non-nil, is its tooltip."
-  (insert " ")
-  (let ((start (point)))
-    (insert-text-button
-     (concat (if selected "● " "  ") label)
-     'action action
-     'my-files-agent-shell-path path
-     'my-files-agent-shell-selected selected
-     'follow-link t
-     'help-echo (or help path)
-     'face (if selected 'my-files-agent-shell-selected 'default))
-    (when selected
-      (setq my-files-agent-shell--selected-path-button
-            (button-at start))))
-  (insert "\n"))
+(defun my-files-agent-shell--scope-toolbar-button (label map help)
+  "Return a header-line button with LABEL, MAP, and HELP text."
+  (propertize
+   (format "[%s]" label)
+   'face 'header-line
+   'mouse-face 'mode-line-highlight
+   'help-echo help
+   'pointer 'hand
+   'local-map map))
 
-(defun my-files-agent-shell--select-area (button)
-  "Select the area represented by BUTTON."
-  (setq my-files-agent-shell--selected-area
-        (button-get button 'my-files-agent-shell-path)
-        my-files-agent-shell--selected-project nil)
-  (my-files-agent-shell-refresh))
+(defun my-files-agent-shell--scope-toolbar ()
+  "Return the mouse-accessible scope toolbar for the Chats header line."
+  (let ((area
+         (if my-files-agent-shell--selected-area
+             (my-files-agent-shell--path-name
+              my-files-agent-shell--selected-area)
+           "None"))
+        (project
+         (cond
+          (my-files-agent-shell--selected-project
+           (my-files-agent-shell--project-label
+            my-files-agent-shell--selected-project))
+          (my-files-agent-shell--selected-area "All")
+          (t "None"))))
+    (list
+     " "
+     (my-files-agent-shell--scope-toolbar-button
+      (format "Area: %s" area)
+      my-files-agent-shell--area-toolbar-map
+      "Choose area in the minibuffer (key 1)")
+     " "
+     (my-files-agent-shell--scope-toolbar-button
+      (format "Project: %s" project)
+      my-files-agent-shell--project-toolbar-map
+      "Choose project in the minibuffer (key 2)")
+     " "
+     (my-files-agent-shell--scope-toolbar-button
+      (format "In Progress: %s"
+              (if my-files-agent-shell--in-progress-only "Only" "All"))
+      my-files-agent-shell--filter-toolbar-map
+      "Toggle whether scope pickers show only In Progress chats (key i)"))))
 
-(defun my-files-agent-shell--select-project (button)
-  "Select the project represented by BUTTON."
-  (setq my-files-agent-shell--selected-project
-        (button-get button 'my-files-agent-shell-path))
-  (my-files-agent-shell-refresh))
+(defun my-files-agent-shell--completion-default (value candidates)
+  "Return the label whose value equals VALUE in CANDIDATES."
+  (car
+   (seq-find
+    (lambda (candidate)
+      (equal (cdr candidate) value))
+    candidates)))
+
+(defun my-files-agent-shell--read-scope-choice
+    (prompt candidates default)
+  "Read and return a value from labeled CANDIDATES using PROMPT.
+
+DEFAULT is the currently selected value."
+  (let* ((default-label
+          (my-files-agent-shell--completion-default default candidates))
+         (label
+          (completing-read prompt candidates nil t nil nil default-label)))
+    (cdr (assoc label candidates))))
+
+(defun my-files-agent-shell-select-area ()
+  "Choose the current area through minibuffer completion."
+  (interactive)
+  (unless (my-files-agent-shell--visible-p)
+    (my-files-agent-shell-open))
+  (unless my-files-agent-shell--available-areas
+    (user-error "No areas found"))
+  (let* ((candidates
+          (mapcar
+           (lambda (area)
+             (cons (my-files-agent-shell--path-name area) area))
+           my-files-agent-shell--available-areas))
+         (area
+          (my-files-agent-shell--read-scope-choice
+           "Area: " candidates my-files-agent-shell--selected-area)))
+    (setq my-files-agent-shell--selected-area area
+          my-files-agent-shell--selected-project nil)
+    (my-files-agent-shell-refresh)))
+
+(defun my-files-agent-shell-select-project ()
+  "Choose the current project's chat scope through minibuffer completion."
+  (interactive)
+  (unless (my-files-agent-shell--visible-p)
+    (my-files-agent-shell-open))
+  (unless my-files-agent-shell--selected-area
+    (my-files-agent-shell-select-area))
+  (let* ((all-area 'all-area-chats)
+         (candidates
+          (cons
+           (cons "All area chats" all-area)
+           (mapcar
+            (lambda (project)
+              (cons (my-files-agent-shell--project-label project) project))
+            my-files-agent-shell--available-projects)))
+         (current (or my-files-agent-shell--selected-project all-area))
+         (project
+          (my-files-agent-shell--read-scope-choice
+           (format "Project in %s: "
+                   (my-files-agent-shell--path-name
+                    my-files-agent-shell--selected-area))
+           candidates current)))
+    (setq my-files-agent-shell--selected-project
+          (unless (eq project all-area) project))
+    (my-files-agent-shell-refresh)))
+
+(defun my-files-agent-shell-select-scope ()
+  "Choose an area and then a project through minibuffer completion."
+  (interactive)
+  (my-files-agent-shell-select-area)
+  (my-files-agent-shell-select-project))
 
 (defun my-files-agent-shell--clean-chat-title (title)
   "Return TITLE's first non-empty trimmed line, or nil."
@@ -2717,66 +2763,6 @@ original failure handler."
     (add-hook 'kill-buffer-hook
               #'my-files-agent-shell--schedule-refresh nil t)))
 
-(defun my-files-agent-shell--render-areas (areas)
-  "Render the area panel using AREAS."
-  (with-current-buffer
-      (my-files-agent-shell--panel-buffer
-       my-files-agent-shell--area-buffer-name
-       #'my-files-agent-shell-area-mode)
-    (let ((selection-key (my-files-agent-shell--selected-button-key))
-          (inhibit-read-only t))
-      (erase-buffer)
-      (setq my-files-agent-shell--selected-path-button nil)
-      (my-files-agent-shell--insert-heading
-       (if my-files-agent-shell--in-progress-only
-           "AREAS · IN PROGRESS ONLY"
-         "AREAS"))
-      (if areas
-          (dolist (area areas)
-            (my-files-agent-shell--insert-path-button
-             (my-files-agent-shell--path-name area)
-             area
-             (equal area my-files-agent-shell--selected-area)
-             #'my-files-agent-shell--select-area))
-        (my-files-agent-shell--insert-empty "No areas found"))
-      (my-files-agent-shell--restore-button-selection selection-key))))
-
-(defun my-files-agent-shell--render-projects (projects)
-  "Render the project panel using PROJECTS."
-  (with-current-buffer
-      (my-files-agent-shell--panel-buffer
-       my-files-agent-shell--project-buffer-name
-       #'my-files-agent-shell-project-mode)
-    (let ((selection-key (my-files-agent-shell--selected-button-key))
-          (inhibit-read-only t))
-      (erase-buffer)
-      (setq my-files-agent-shell--selected-path-button nil)
-      (my-files-agent-shell--insert-heading
-       (if my-files-agent-shell--in-progress-only
-           "PROJECTS · IN PROGRESS ONLY"
-         "PROJECTS"))
-      (if my-files-agent-shell--selected-area
-          (progn
-            (my-files-agent-shell--insert-path-button
-             "All area chats"
-             my-files-agent-shell--selected-area
-             (null my-files-agent-shell--selected-project)
-             #'my-files-agent-shell--select-area
-             "Show chats from every project in this area")
-            (if projects
-                (dolist (project projects)
-                  (my-files-agent-shell--insert-path-button
-                   (directory-file-name
-                    (file-relative-name project
-                                        my-files-agent-shell--selected-area))
-                   project
-                   (equal project my-files-agent-shell--selected-project)
-                   #'my-files-agent-shell--select-project))
-              (my-files-agent-shell--insert-empty "No projects found")))
-        (my-files-agent-shell--insert-empty
-         "Select an area"))
-      (my-files-agent-shell--restore-button-selection selection-key))))
-
 (defun my-files-agent-shell--insert-saved-chat-button (entry)
   "Insert a button that resumes saved chat ENTRY."
   (let ((key (my-files-agent-shell--saved-conversation-key entry))
@@ -3054,6 +3040,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                 (lambda (area)
                   (equal area my-files-agent-shell--selected-area))
                 areas))))
+    (setq my-files-agent-shell--available-areas areas)
     (setq my-files-agent-shell--selected-area
           (or selected-area (car areas)))
     (let* ((all-projects
@@ -3075,6 +3062,7 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                   (lambda (project)
                     (equal project my-files-agent-shell--selected-project))
                   projects))))
+      (setq my-files-agent-shell--available-projects projects)
       (setq my-files-agent-shell--selected-project selected-project)
       (let* ((scope (or my-files-agent-shell--selected-project
                         my-files-agent-shell--selected-area))
@@ -3108,8 +3096,6 @@ Call INSERT-ITEMS to render the section body when COUNT is positive."
                scope
                my-files-agent-shell--codex-threads)))
         (setq my-files-agent-shell--known-chat-buffers all-chat-buffers)
-        (my-files-agent-shell--render-areas areas)
-        (my-files-agent-shell--render-projects projects)
         (my-files-agent-shell--render-chat-lists
          chats saved-chats codex-threads)
         (my-files-agent-shell--update-panel-focus-faces)
@@ -3243,90 +3229,6 @@ for the main conversation window."
   (set-window-parameter window 'no-delete-other-windows t)
   (set-window-parameter window 'my-files-agent-shell-panel t))
 
-(defun my-files-agent-shell--navigation-row-height ()
-  "Return a shallow height that fits above both persistent windows."
-  (let* ((available
-          (min (window-total-height my-files-agent-shell--chat-window)
-               (window-total-height my-files-agent-shell--main-window)))
-         (minimum (max 2 window-min-height))
-         (maximum (floor available 3)))
-    (when (< available (* 2 minimum))
-      (user-error "Frame is too short to show Areas and Projects"))
-    (max minimum
-         (min my-files-agent-shell-navigation-height maximum))))
-
-(defun my-files-agent-shell--show-navigation-panels ()
-  "Show Areas and Projects in a shallow row above the persistent windows."
-  (unless (my-files-agent-shell--visible-p)
-    (user-error "The My Files browser is not open"))
-  (when (and (not (my-files-agent-shell--navigation-visible-p))
-             (or (window-live-p my-files-agent-shell--area-window)
-                 (window-live-p my-files-agent-shell--project-window)))
-    (my-files-agent-shell--hide-navigation-panels))
-  (unless (my-files-agent-shell--navigation-visible-p)
-    (let ((height (my-files-agent-shell--navigation-row-height))
-          area-window project-window)
-      (condition-case error-data
-          (let ((ignore-window-parameters t))
-            (setq area-window
-                  (split-window my-files-agent-shell--chat-window
-                                (- height) 'above)
-                  project-window
-                  (split-window my-files-agent-shell--main-window
-                                (- height) 'above)
-                  my-files-agent-shell--area-window area-window
-                  my-files-agent-shell--project-window project-window)
-            (my-files-agent-shell--prepare-panel-window
-             area-window
-             (my-files-agent-shell--panel-buffer
-              my-files-agent-shell--area-buffer-name
-              #'my-files-agent-shell-area-mode))
-            (my-files-agent-shell--prepare-panel-window
-             project-window
-             (my-files-agent-shell--panel-buffer
-              my-files-agent-shell--project-buffer-name
-              #'my-files-agent-shell-project-mode))
-            (my-files-agent-shell--update-panel-focus-faces))
-        (error
-         (let ((ignore-window-parameters t))
-           (when (window-live-p area-window)
-             (delete-window area-window))
-           (when (window-live-p project-window)
-             (delete-window project-window)))
-         (setq my-files-agent-shell--area-window nil
-               my-files-agent-shell--project-window nil)
-         (signal (car error-data) (cdr error-data)))))))
-
-(defun my-files-agent-shell--hide-navigation-panels ()
-  "Hide the optional Areas and Projects row."
-  (when (or (window-live-p my-files-agent-shell--area-window)
-            (window-live-p my-files-agent-shell--project-window))
-    (let ((navigation-selected
-           (memq (selected-window)
-                 (list my-files-agent-shell--area-window
-                       my-files-agent-shell--project-window)))
-          (ignore-window-parameters t))
-      (when navigation-selected
-        (select-window my-files-agent-shell--chat-window))
-      (when (window-live-p my-files-agent-shell--area-window)
-        (delete-window my-files-agent-shell--area-window))
-      (when (window-live-p my-files-agent-shell--project-window)
-        (delete-window my-files-agent-shell--project-window))
-      (setq my-files-agent-shell--area-window nil
-            my-files-agent-shell--project-window nil)
-      (when navigation-selected
-        (my-files-agent-shell-focus-chats)))))
-
-;;;###autoload
-(defun my-files-agent-shell-toggle-navigation-panels ()
-  "Toggle the shallow Areas and Projects row above the browser."
-  (interactive)
-  (unless (my-files-agent-shell--visible-p)
-    (my-files-agent-shell-open))
-  (if (my-files-agent-shell--navigation-visible-p)
-      (my-files-agent-shell--hide-navigation-panels)
-    (my-files-agent-shell--show-navigation-panels)))
-
 ;;;###autoload
 (defun my-files-agent-shell-open ()
   "Open the Chats and main conversation workspace."
@@ -3348,8 +3250,6 @@ for the main conversation window."
                   chat-window
                   (split-window main (- chat-width) 'left))
             (setq my-files-agent-shell--saved-window-configuration configuration
-                  my-files-agent-shell--area-window nil
-                  my-files-agent-shell--project-window nil
                   my-files-agent-shell--chat-window chat-window
                   my-files-agent-shell--main-window main)
             (my-files-agent-shell--prepare-panel-window
@@ -3375,8 +3275,6 @@ for the main conversation window."
                       #'my-files-agent-shell--window-buffer-changed)
          (set-window-configuration configuration)
          (setq my-files-agent-shell--saved-window-configuration nil
-               my-files-agent-shell--area-window nil
-               my-files-agent-shell--project-window nil
                my-files-agent-shell--chat-window nil
                my-files-agent-shell--main-window nil)
          (signal (car error-data) (cdr error-data)))))))
@@ -3400,8 +3298,6 @@ for the main conversation window."
         my-files-agent-shell--codex-refresh-timer nil)
   (let ((configuration my-files-agent-shell--saved-window-configuration))
     (setq my-files-agent-shell--saved-window-configuration nil
-          my-files-agent-shell--area-window nil
-          my-files-agent-shell--project-window nil
           my-files-agent-shell--chat-window nil
           my-files-agent-shell--main-window nil)
     (when (window-configuration-p configuration)

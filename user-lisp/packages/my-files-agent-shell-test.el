@@ -94,11 +94,13 @@
                (my-files-agent-shell--discover-projects area))
               '("Client One" "Group/Client Two"))))))
 
-(ert-deftest my-files-agent-shell-filters-navigation-to-in-progress-chats ()
+(ert-deftest my-files-agent-shell-filters-scope-options-to-in-progress-chats ()
   (my-files-agent-shell-test--with-tree
       ((my-files-agent-shell--in-progress-only nil)
        (my-files-agent-shell--selected-area nil)
        (my-files-agent-shell--selected-project nil)
+       (my-files-agent-shell--available-areas nil)
+       (my-files-agent-shell--available-projects nil)
        (my-files-agent-shell--codex-threads nil))
     (let* ((work (expand-file-name "Work" root))
            (personal (expand-file-name "Personal" root))
@@ -163,47 +165,29 @@
               (my-files-agent-shell-toggle-in-progress-filter)
               (should my-files-agent-shell--in-progress-only)
               (should-not my-files-agent-shell--selected-project)
-              (with-current-buffer my-files-agent-shell--area-buffer-name
-                (should
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory work)))
-                (should
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory personal)))
-                (should-not
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory empty)))
-                (should (string-match-p "IN PROGRESS ONLY"
-                                        (buffer-string))))
-              (with-current-buffer my-files-agent-shell--project-buffer-name
-                (should
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory active)))
-                (should-not
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory review)))
-                (should-not
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory archived))))
+              (should
+               (member (my-files-agent-shell--canonical-directory work)
+                       my-files-agent-shell--available-areas))
+              (should
+               (member (my-files-agent-shell--canonical-directory personal)
+                       my-files-agent-shell--available-areas))
+              (should-not
+               (member (my-files-agent-shell--canonical-directory empty)
+                       my-files-agent-shell--available-areas))
+              (should
+               (equal my-files-agent-shell--available-projects
+                      (list
+                       (my-files-agent-shell--canonical-directory active))))
               (my-files-agent-shell-toggle-in-progress-filter)
               (should-not my-files-agent-shell--in-progress-only)
-              (with-current-buffer my-files-agent-shell--area-buffer-name
+              (should
+               (member (my-files-agent-shell--canonical-directory empty)
+                       my-files-agent-shell--available-areas))
+              (dolist (project (list active review archived))
                 (should
-                 (my-files-agent-shell-test--button-with-property
-                  'my-files-agent-shell-path
-                  (my-files-agent-shell--canonical-directory empty))))
-              (with-current-buffer my-files-agent-shell--project-buffer-name
-                (dolist (project (list active review archived))
-                  (should
-                   (my-files-agent-shell-test--button-with-property
-                    'my-files-agent-shell-path
-                    (my-files-agent-shell--canonical-directory project)))))))
+                 (member
+                  (my-files-agent-shell--canonical-directory project)
+                  my-files-agent-shell--available-projects)))))
         (kill-buffer live-chat)))))
 
 (ert-deftest my-files-agent-shell-filters-chats-by-selected-project ()
@@ -819,7 +803,9 @@
                      ("C-p" . my-files-agent-shell-previous-item)
                      ("C-f" . my-files-agent-shell-next-panel)
                      ("C-b" . my-files-agent-shell-previous-panel)
-                     ("v" . my-files-agent-shell-toggle-navigation-panels)
+                     ("1" . my-files-agent-shell-select-area)
+                     ("2" . my-files-agent-shell-select-project)
+                     ("v" . my-files-agent-shell-select-scope)
                      ("SPC" . my-files-agent-shell-toggle-mark-at-point)
                      ("i" . my-files-agent-shell-toggle-in-progress-filter)
                      ("a" . my-files-agent-shell-archive-at-point)
@@ -845,14 +831,37 @@
     (should hl-line-sticky-flag)
     (should (eq hl-line-face 'my-files-agent-shell-cursor-inactive))))
 
-(ert-deftest my-files-agent-shell-panels-have-labeled-modelines ()
-  (dolist (spec '((my-files-agent-shell-area-mode . "Areas")
-                  (my-files-agent-shell-project-mode . "Projects")
-                  (my-files-agent-shell-chat-mode . "Agent Chats")))
+(ert-deftest my-files-agent-shell-chat-panel-has-modeline-and-scope-toolbar ()
+  (let ((my-files-agent-shell--selected-area "/tmp/Work/")
+        (my-files-agent-shell--selected-project "/tmp/Work/Client/"))
     (with-temp-buffer
-      (funcall (car spec))
-      (should (equal mode-name (cdr spec)))
-      (should (equal mode-line-format '(" " mode-name " "))))))
+      (my-files-agent-shell-chat-mode)
+      (should (equal mode-name "Agent Chats"))
+      (should (equal mode-line-format '(" " mode-name " ")))
+      (should (equal header-line-format
+                     '(:eval (my-files-agent-shell--scope-toolbar))))
+      (let* ((toolbar (my-files-agent-shell--scope-toolbar))
+             (area-button (nth 1 toolbar))
+             (project-button (nth 3 toolbar))
+             (filter-button (nth 5 toolbar)))
+        (should (string-match-p "Area: Work" area-button))
+        (should (string-match-p "Project: Client" project-button))
+        (should (string-match-p "In Progress: All" filter-button))
+        (should
+         (eq (keymap-lookup
+              (get-text-property 0 'local-map area-button)
+              "<header-line> <mouse-1>")
+             #'my-files-agent-shell-select-area))
+        (should
+         (eq (keymap-lookup
+              (get-text-property 0 'local-map project-button)
+              "<header-line> <mouse-1>")
+             #'my-files-agent-shell-select-project))
+        (should
+         (eq (keymap-lookup
+              (get-text-property 0 'local-map filter-button)
+              "<header-line> <mouse-1>")
+             #'my-files-agent-shell-toggle-in-progress-filter))))))
 
 (ert-deftest my-files-agent-shell-restores-highlighted-chat-with-u ()
   (my-files-agent-shell-test--with-state
@@ -896,106 +905,50 @@
     (my-files-agent-shell-mode)
     (should-not window-size-fixed)))
 
-(ert-deftest my-files-agent-shell-toggles-shallow-navigation-row ()
+(ert-deftest my-files-agent-shell-selects-scopes-without-extra-windows ()
   (my-files-agent-shell-test--with-tree ()
     (let* ((area (expand-file-name "Work" root))
            (project (file-name-as-directory
                      (expand-file-name "Project" area)))
-           (my-files-agent-shell-navigation-height 7)
-           (configuration (current-window-configuration)))
+           (configuration (current-window-configuration))
+           (selections '("Work" "Project" "All area chats"))
+           (my-files-agent-shell--available-areas nil)
+           (my-files-agent-shell--available-projects nil)
+           prompts)
       (make-directory project t)
       (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
       (write-region "" nil (expand-file-name ".project.toml" project) nil 'silent)
       (unwind-protect
-          (progn
+          (cl-letf (((symbol-function 'agent-shell-buffers) #'ignore)
+                    ((symbol-function
+                      'my-files-agent-shell--refresh-codex-threads)
+                     #'ignore)
+                    ((symbol-function 'completing-read)
+                     (lambda (prompt &rest _arguments)
+                       (push prompt prompts)
+                       (pop selections))))
             (let ((ignore-window-parameters t))
               (delete-other-windows))
             (setq my-files-agent-shell--selected-area nil
                   my-files-agent-shell--selected-project nil)
             (my-files-agent-shell-open)
-            (should (eq (selected-window)
-                        my-files-agent-shell--chat-window))
-            (should-not
-             (my-files-agent-shell--navigation-visible-p))
             (should (= (length (window-list)) 2))
-            (let* ((total (+ (window-total-width
-                              my-files-agent-shell--chat-window)
-                             (window-total-width
-                              my-files-agent-shell--main-window)))
-                   (chat-width
-                    (window-total-width my-files-agent-shell--chat-window)))
-              (should (<= chat-width (floor total 2))))
-            (my-files-agent-shell-toggle-navigation-panels)
-            (should (my-files-agent-shell--navigation-visible-p))
-            (should (= (length (window-list)) 4))
+            (my-files-agent-shell-select-area)
             (should
-             (<= (window-total-height my-files-agent-shell--area-window)
-                 my-files-agent-shell-navigation-height))
-            (should
-             (= (window-total-height my-files-agent-shell--area-window)
-                (window-total-height
-                 my-files-agent-shell--project-window)))
-            (should
-             (= (car (window-edges my-files-agent-shell--area-window))
-                (car (window-edges my-files-agent-shell--chat-window))))
-            (should
-             (= (car (window-edges my-files-agent-shell--project-window))
-                (car (window-edges my-files-agent-shell--main-window))))
-            (should
-             (< (cadr (window-edges my-files-agent-shell--area-window))
-                (cadr (window-edges my-files-agent-shell--chat-window))))
-            (my-files-agent-shell-focus-areas)
-            (should (eq (selected-window)
-                        my-files-agent-shell--area-window))
-            (with-current-buffer my-files-agent-shell--area-buffer-name
-              (should
-               (eq (button-get
-                    (my-files-agent-shell-test--button-with-property
-                     'my-files-agent-shell-selected t)
-                    'face)
-                   'my-files-agent-shell-selected)))
-            (my-files-agent-shell-next-panel)
-            (should (eq (selected-window)
-                        my-files-agent-shell--project-window))
-            (with-current-buffer my-files-agent-shell--area-buffer-name
-              (should
-               (eq (button-get
-                    (my-files-agent-shell-test--button-with-property
-                     'my-files-agent-shell-selected t)
-                    'face)
-                   'my-files-agent-shell-selected-inactive)))
-            (my-files-agent-shell-next-item)
-            (should
-             (equal (button-get (button-at (point))
-                                'my-files-agent-shell-path)
-                    project))
-            (my-files-agent-shell-next-panel)
-            (should (eq (selected-window)
-                        my-files-agent-shell--chat-window))
-            (set-window-point my-files-agent-shell--project-window
-                              (point-min))
-            (my-files-agent-shell-previous-panel)
-            (should (eq (selected-window)
-                        my-files-agent-shell--project-window))
-            (should
-             (equal (button-get (button-at (point))
-                                'my-files-agent-shell-path)
-                    project))
-            (my-files-agent-shell-next-panel)
-            (my-files-agent-shell-next-panel)
-            (should (eq (selected-window)
-                        my-files-agent-shell--main-window))
-            (my-files-agent-shell-previous-panel)
-            (should (eq (selected-window)
-                        my-files-agent-shell--chat-window))
-            (my-files-agent-shell-toggle-navigation-panels)
-            (should-not
-             (my-files-agent-shell--navigation-visible-p))
+             (equal my-files-agent-shell--selected-area
+                    (my-files-agent-shell--canonical-directory area)))
+            (should-not my-files-agent-shell--selected-project)
             (should (= (length (window-list)) 2))
-            (my-files-agent-shell-focus-projects)
-            (should (my-files-agent-shell--navigation-visible-p))
-            (should (eq (selected-window)
-                        my-files-agent-shell--project-window)))
+            (my-files-agent-shell-select-project)
+            (should
+             (equal my-files-agent-shell--selected-project
+                    (my-files-agent-shell--canonical-directory project)))
+            (should (= (length (window-list)) 2))
+            (my-files-agent-shell-select-project)
+            (should-not my-files-agent-shell--selected-project)
+            (should (equal (nreverse prompts)
+                           '("Area: " "Project in Work: "
+                             "Project in Work: "))))
         (when (my-files-agent-shell--visible-p)
           (my-files-agent-shell-close))
         (set-window-configuration configuration)))))
@@ -1334,6 +1287,8 @@
            (my-files-agent-shell--selected-area
             (file-name-as-directory area))
            (my-files-agent-shell--selected-project nil)
+           (my-files-agent-shell--available-areas nil)
+           (my-files-agent-shell--available-projects nil)
            (my-files-agent-shell--codex-threads nil))
       (make-directory project t)
       (write-region "" nil (expand-file-name ".area.toml" area) nil 'silent)
@@ -1345,8 +1300,9 @@
                  #'ignore))
         (my-files-agent-shell-refresh))
       (should-not my-files-agent-shell--selected-project)
-      (with-current-buffer my-files-agent-shell--project-buffer-name
-        (should (string-match-p "All area chats" (buffer-string))))
+      (should
+       (equal my-files-agent-shell--available-projects
+              (list (my-files-agent-shell--canonical-directory project))))
       (with-current-buffer my-files-agent-shell--chat-buffer-name
         (should-not (string-match-p "Select a project" (buffer-string)))))))
 
