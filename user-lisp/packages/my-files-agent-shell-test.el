@@ -1091,6 +1091,135 @@
                    (my-files-agent-shell--canonical-directory project)))
     (should (eq restore-verbosity 'first-last))))
 
+(ert-deftest my-files-agent-shell-retries-codex-history-load-with-resume ()
+  (let* ((buffer (generate-new-buffer " codex history fallback"))
+         (state '((:agent-config . ((:identifier . codex)))
+                  (:supports-session-resume . t)
+                  (:pending-restore . ((:prompt-turns . (nil))))))
+         (load-request
+          (acp-make-session-load-request
+           :session-id "paginated-session"
+           :cwd default-directory
+           :mcp-servers '(((name . "example")))))
+         methods
+         fallback-text
+         response
+         resume-request
+         failure)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'agent-shell--update-bootstrapping-fragment)
+                   (lambda (&rest arguments)
+                     (setq fallback-text (plist-get arguments :body))))
+                  ((symbol-function 'agent-shell--make-boxed-message)
+                   (lambda (&rest arguments)
+                     (plist-get arguments :text))))
+          (my-files-agent-shell--send-request-with-codex-resume-fallback
+           (lambda (&rest arguments)
+             (let* ((request (plist-get arguments :request))
+                    (method (map-elt request :method)))
+               (setq methods (append methods (list method)))
+               (if (equal method "session/load")
+                   (funcall
+                    (plist-get arguments :on-failure)
+                    '((code . -32603) (message . "Internal error"))
+                    '((details . "paginated threads do not support thread/read(includeTurns=true)")))
+                 (setq resume-request request)
+                 (funcall (plist-get arguments :on-success)
+                          '((models . []))))))
+           :state state
+           :client 'client
+           :request load-request
+           :buffer buffer
+           :on-success (lambda (result) (setq response result))
+           :on-failure (lambda (error-data raw-message)
+                         (setq failure (list error-data raw-message)))))
+      (kill-buffer buffer))
+    (should (equal methods '("session/load" "session/resume")))
+    (should
+     (equal (map-nested-elt resume-request '(:params sessionId))
+            "paginated-session"))
+    (should
+     (equal (map-nested-elt resume-request '(:params cwd))
+            (directory-file-name (expand-file-name default-directory))))
+    (should
+     (equal (map-nested-elt resume-request '(:params mcpServers))
+            '(((name . "example")))))
+    (should (equal (map-elt response 'models) []))
+    (should-not failure)
+    (should-not (map-elt state :pending-restore))
+    (should (string-match-p "without history" fallback-text))))
+
+(ert-deftest my-files-agent-shell-keeps-codex-load-error-when-resume-fails ()
+  (let* ((buffer (generate-new-buffer " codex failed fallback"))
+         (state '((:agent-config . ((:identifier . codex)))
+                  (:supports-session-resume . t)
+                  (:pending-restore . nil)))
+         (load-request
+          (acp-make-session-load-request
+           :session-id "unavailable-session"
+           :cwd default-directory))
+         methods
+         failure)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'agent-shell--update-bootstrapping-fragment)
+                   #'ignore)
+                  ((symbol-function 'agent-shell--make-boxed-message)
+                   (lambda (&rest arguments)
+                     (plist-get arguments :text))))
+          (my-files-agent-shell--send-request-with-codex-resume-fallback
+           (lambda (&rest arguments)
+             (let ((method
+                    (map-elt (plist-get arguments :request) :method)))
+               (setq methods (append methods (list method)))
+               (funcall
+                (plist-get arguments :on-failure)
+                `((code . -32603) (message . ,method))
+                `((method . ,method)))))
+           :state state
+           :client 'client
+           :request load-request
+           :buffer buffer
+           :on-success #'ignore
+           :on-failure (lambda (error-data raw-message)
+                         (setq failure (list error-data raw-message)))))
+      (kill-buffer buffer))
+    (should (equal methods '("session/load" "session/resume")))
+    (should (equal (map-elt (car failure) 'message) "session/resume"))
+    (should (equal (map-elt (cadr failure) 'method) "session/resume"))))
+
+(ert-deftest my-files-agent-shell-does-not-retry-non-codex-history-load ()
+  (let* ((buffer (generate-new-buffer " non-codex history load"))
+         (state '((:agent-config . ((:identifier . other-agent)))
+                  (:supports-session-resume . t)))
+         (load-request
+          (acp-make-session-load-request
+           :session-id "other-session"
+           :cwd default-directory))
+         methods
+         failure)
+    (unwind-protect
+        (my-files-agent-shell--send-request-with-codex-resume-fallback
+         (lambda (&rest arguments)
+           (setq methods
+                 (append methods
+                         (list
+                          (map-elt (plist-get arguments :request)
+                                   :method))))
+           (funcall (plist-get arguments :on-failure)
+                    '((code . -32603)) '((details . "load failed"))))
+         :state state
+         :client 'client
+         :request load-request
+         :buffer buffer
+         :on-success #'ignore
+         :on-failure (lambda (error-data raw-message)
+                       (setq failure (list error-data raw-message))))
+      (kill-buffer buffer))
+    (should (equal methods '("session/load")))
+    (should (equal (map-elt (cadr failure) 'details) "load failed"))))
+
 (ert-deftest my-files-agent-shell-resumes-chat-from-stale-live-row ()
   (my-files-agent-shell-test--with-state
       ((my-files-agent-shell--selected-project default-directory))

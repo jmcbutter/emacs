@@ -131,7 +131,9 @@ this value."
 
 The agent resumes the complete session context regardless of this display
 setting.  `first-last' keeps large histories responsive while showing enough
-of the conversation to confirm that the correct session was restored."
+of the conversation to confirm that the correct session was restored.  When
+Codex cannot replay a paginated history, the conversation is resumed without
+visible history instead of being replaced by a new session."
   :type '(choice (const :tag "Last turn" last)
                  (const :tag "First and last turns" first-last)
                  (const :tag "Full visible history" full))
@@ -287,14 +289,18 @@ transcript."
 
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell--auto-preferred-config "agent-shell")
+(declare-function agent-shell--make-boxed-message "agent-shell")
 (declare-function agent-shell-cwd "agent-shell-project")
+(declare-function agent-shell--send-request "agent-shell")
 (declare-function agent-shell-select-config "agent-shell")
 (declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell-status "agent-shell")
 (declare-function agent-shell-subscribe-to "agent-shell")
+(declare-function agent-shell--update-bootstrapping-fragment "agent-shell")
 (declare-function agent-shell--resolved-agent-configs "agent-shell")
 (declare-function agent-shell-chat--relabel "agent-shell-chat-mode")
 (declare-function agent-shell-ui--set-group-collapsed "agent-shell-ui")
+(declare-function acp-make-session-resume-request "acp")
 (declare-function shell-maker-set-buffer-name "shell-maker")
 (declare-function codex-ide--create-query-session "codex-ide-session")
 (declare-function codex-ide--query-only-session-for-directory
@@ -2339,6 +2345,70 @@ All other text properties at POSITION are preserved."
      my-files-agent-shell--main-window)
     my-files-agent-shell--main-window))
 
+(defun my-files-agent-shell--codex-history-load-request-p (state request)
+  "Return non-nil when STATE and REQUEST describe a resumable Codex load."
+  (and (eq (map-nested-elt state '(:agent-config :identifier)) 'codex)
+       (map-elt state :supports-session-resume)
+       (equal (map-elt request :method) "session/load")))
+
+(defun my-files-agent-shell--resume-request-without-history (load-request)
+  "Return a resume request preserving parameters from LOAD-REQUEST."
+  (let ((params (map-elt load-request :params)))
+    (acp-make-session-resume-request
+     :session-id (map-elt params 'sessionId)
+     :cwd (map-elt params 'cwd)
+     :mcp-servers (map-elt params 'mcpServers)
+     :meta (map-elt params '_meta))))
+
+(defun my-files-agent-shell--send-request-with-codex-resume-fallback
+    (original &rest arguments)
+  "Send an Agent Shell request, retrying failed Codex history loads.
+
+ORIGINAL is `agent-shell--send-request' and ARGUMENTS are its keyword
+arguments.  Codex rejects `session/load' for paginated task histories even
+though the same task supports `session/resume'.  When a Codex history load
+fails, retry it once without history replay before invoking Agent Shell's
+original failure handler."
+  (let* ((state (plist-get arguments :state))
+         (request (plist-get arguments :request)))
+    (if (not (my-files-agent-shell--codex-history-load-request-p
+              state request))
+        (apply original arguments)
+      (let ((client (plist-get arguments :client))
+            (buffer (plist-get arguments :buffer))
+            (on-success (plist-get arguments :on-success))
+            (on-failure (plist-get arguments :on-failure))
+            (sync (plist-get arguments :sync))
+            (resume-request
+             (my-files-agent-shell--resume-request-without-history request)))
+        (setq arguments
+              (plist-put
+               (copy-sequence arguments)
+               :on-failure
+               (lambda (load-error load-raw-message)
+                 (if (not (buffer-live-p buffer))
+                     (when on-failure
+                       (funcall on-failure load-error load-raw-message))
+                   (with-current-buffer buffer
+                     (map-put! state :pending-restore nil)
+                     (agent-shell--update-bootstrapping-fragment
+                      :state state
+                      :block-id "restore_fallback"
+                      :body
+                      (agent-shell--make-boxed-message
+                       :text
+                       "History unavailable. Resuming without history replay."))
+                     (funcall
+                      original
+                      :state state
+                      :client client
+                      :request resume-request
+                      :buffer buffer
+                      :on-success on-success
+                      :on-failure on-failure
+                      :sync sync))))))
+        (apply original arguments)))))
+
 (defun my-files-agent-shell--start-resumed-chat
     (session-id agent-name directory &optional agent-config)
   "Resume SESSION-ID for AGENT-NAME in DIRECTORY and show it in the main pane."
@@ -3176,6 +3246,14 @@ for the main conversation window."
                          'agent-shell-chat--relabel)
   (advice-add 'agent-shell-chat--relabel :after
               #'my-files-agent-shell--after-chat-relabel))
+
+(unless
+    (advice-member-p
+     #'my-files-agent-shell--send-request-with-codex-resume-fallback
+     'agent-shell--send-request)
+  (advice-add
+   'agent-shell--send-request :around
+   #'my-files-agent-shell--send-request-with-codex-resume-fallback))
 
 ;; The package can be loaded after conversations already exist (for example,
 ;; by invoking the browser command for the first time mid-session).
