@@ -283,6 +283,17 @@ transcript."
     error)
   "Agent-shell events that change only a chat row's operational status.")
 
+(defconst my-files-agent-shell--codex-latest-turn-status-query
+  (concat
+   "WITH latest AS ("
+   "SELECT thread_id, MAX(rollout_ordinal) AS ordinal "
+   "FROM thread_turns GROUP BY thread_id) "
+   "SELECT turns.thread_id || char(9) || turns.status "
+   "FROM thread_turns AS turns JOIN latest "
+   "ON latest.thread_id = turns.thread_id "
+   "AND latest.ordinal = turns.rollout_ordinal;")
+  "Read each Codex task's latest persisted turn status.")
+
 (defconst my-files-agent-shell--chat-refresh-events
   `(,@my-files-agent-shell--chat-status-events session-title-changed)
   "Agent-shell events observed by the conversation browser.")
@@ -1274,14 +1285,175 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
 
 (defun my-files-agent-shell--codex-thread-status (thread)
   "Return THREAD's Codex status as a string."
-  (let ((status (alist-get 'type (alist-get 'status thread))))
+  (let* ((server-status (alist-get 'type (alist-get 'status thread)))
+         (local-status
+          (alist-get 'my-files-agent-shell-local-runtime-status thread))
+         (status
+          (if (and server-status
+                   (not (equal (format "%s" server-status) "notLoaded")))
+              server-status
+            (or local-status server-status))))
     (if status (format "%s" status) "notLoaded")))
 
 (defun my-files-agent-shell--codex-thread-status-label (thread)
   "Return a useful bracketed runtime status for Codex THREAD."
-  (if (string= (my-files-agent-shell--codex-thread-status thread) "active")
-      "[busy]"
-    "[closed]"))
+  (pcase (my-files-agent-shell--codex-thread-status thread)
+    ((or "active" "inProgress") "[busy]")
+    ((or "completed" "interrupted" "cancelled" "canceled") "[ready]")
+    ((or "failed" "systemError") "[error]")
+    (_ "[unknown]")))
+
+(defun my-files-agent-shell--codex-home-directory ()
+  "Return the directory where Codex stores local task state."
+  (let ((configured (getenv "CODEX_HOME")))
+    (file-name-as-directory
+     (expand-file-name
+      (if (and configured (not (string-empty-p configured)))
+          configured
+        ".codex")
+      (expand-file-name "~")))))
+
+(defun my-files-agent-shell--codex-history-database ()
+  "Return the newest local Codex thread-history database, if present."
+  (condition-case nil
+      (let ((directory (my-files-agent-shell--codex-home-directory)))
+        (when (file-directory-p directory)
+          (car
+           (sort
+            (directory-files
+             directory t "\\`thread_history_[0-9]+\\.sqlite\\'")
+            #'file-newer-than-file-p))))
+    (file-error nil)))
+
+(defun my-files-agent-shell--capture-command-output
+    (name command callback)
+  "Run COMMAND asynchronously and call CALLBACK with its output.
+
+NAME identifies the short-lived process.  CALLBACK receives nil when the
+process cannot start or exits unsuccessfully."
+  (let ((buffer (generate-new-buffer (format " *%s output*" name))))
+    (condition-case nil
+        (let ((process
+               (make-process
+                :name (generate-new-buffer-name name)
+                :buffer buffer
+                :command command
+                :coding 'utf-8-unix
+                :connection-type 'pipe
+                :noquery t
+                :stderr buffer
+                :sentinel
+                (lambda (process _event)
+                  (when (and (memq (process-status process)
+                                   '(exit signal failed))
+                             (not (process-get process 'callback-finished)))
+                    (process-put process 'callback-finished t)
+                    (let ((output
+                           (and (eq (process-status process) 'exit)
+                                (zerop (process-exit-status process))
+                                (buffer-live-p buffer)
+                                (with-current-buffer buffer
+                                  (buffer-string)))))
+                      (unwind-protect
+                          (funcall callback output)
+                        (when (buffer-live-p buffer)
+                          (kill-buffer buffer)))))))))
+          (set-process-query-on-exit-flag process nil)
+          process)
+      (error
+       (when (buffer-live-p buffer)
+         (kill-buffer buffer))
+       (funcall callback nil)
+       nil))))
+
+(defun my-files-agent-shell--parse-codex-turn-statuses (output)
+  "Return a task-id status table parsed from sqlite OUTPUT."
+  (let ((statuses (make-hash-table :test #'equal)))
+    (dolist (line (split-string (or output "") "\n" t))
+      (when (string-match "\\`\\([^\t]+\\)\t\\([[:alnum:]]+\\)\\'" line)
+        (puthash (match-string 1 line)
+                 (match-string 2 line)
+                 statuses)))
+    statuses))
+
+(defun my-files-agent-shell--parse-codex-writer-locks (output)
+  "Return a set of task ids whose lock paths occur in lslocks OUTPUT."
+  (let ((locked (make-hash-table :test #'equal)))
+    (dolist (line (split-string (or output "") "\n" t))
+      (let* ((path (string-remove-suffix " (deleted)" (string-trim line)))
+             (file (file-name-nondirectory path)))
+        (when (string-suffix-p ".lock" file)
+          (puthash (string-remove-suffix ".lock" file) t locked))))
+    locked))
+
+(defun my-files-agent-shell--apply-codex-local-statuses
+    (threads turn-statuses locked-threads)
+  "Add trustworthy local runtime states to THREADS.
+
+TURN-STATUSES maps task ids to their latest persisted turn state.
+LOCKED-THREADS contains task ids currently owned by a live Codex process.
+An in-progress database row is considered active only while its writer lock
+is held, because interrupted processes can leave stale in-progress rows."
+  (mapcar
+   (lambda (thread)
+     (let* ((id (alist-get 'id thread))
+            (turn-status (and id (gethash id turn-statuses)))
+            (runtime-status
+             (pcase turn-status
+               ("inProgress"
+                (and (gethash id locked-threads) "active"))
+               ((or "completed" "interrupted" "cancelled" "canceled"
+                    "failed")
+                turn-status)))
+            (copy (assq-delete-all
+                   'my-files-agent-shell-local-runtime-status
+                   (copy-tree thread))))
+       (if runtime-status
+           (cons
+            (cons 'my-files-agent-shell-local-runtime-status runtime-status)
+            copy)
+         copy)))
+   threads))
+
+(defun my-files-agent-shell--enrich-codex-runtime-statuses
+    (threads callback)
+  "Asynchronously add cross-process runtime states to THREADS.
+
+CALLBACK receives the enriched thread list.  Codex app-server status is local
+to one app-server process, so a separate discovery process reports tasks owned
+by Codex Desktop or Agent Shell as `notLoaded'.  The local history projection
+and held writer locks provide a guarded cross-process signal."
+  (let ((database (my-files-agent-shell--codex-history-database))
+        (sqlite (executable-find "sqlite3")))
+    (if (not (and database sqlite))
+        (funcall callback threads)
+      (my-files-agent-shell--capture-command-output
+       "my-files-codex-status"
+       (list sqlite "-readonly" "-noheader" database
+             my-files-agent-shell--codex-latest-turn-status-query)
+       (lambda (status-output)
+         (if (not status-output)
+             (funcall callback threads)
+           (let ((turn-statuses
+                  (my-files-agent-shell--parse-codex-turn-statuses
+                   status-output))
+                 (lslocks (executable-find "lslocks")))
+             (if (not lslocks)
+                 (funcall
+                  callback
+                  (my-files-agent-shell--apply-codex-local-statuses
+                   threads turn-statuses (make-hash-table :test #'equal)))
+               (my-files-agent-shell--capture-command-output
+                "my-files-codex-locks"
+                (list lslocks "--noheadings" "--notruncate" "--output" "PATH")
+                (lambda (lock-output)
+                  (funcall
+                   callback
+                   (my-files-agent-shell--apply-codex-local-statuses
+                    threads
+                    turn-statuses
+                    (my-files-agent-shell--parse-codex-writer-locks
+                     lock-output)))))))))))))
 
 (defun my-files-agent-shell--codex-thread-title (thread)
   "Return a concise display title for Codex THREAD."
@@ -1340,6 +1512,24 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
   (my-files-agent-shell--schedule-refresh)
   (my-files-agent-shell--start-codex-refresh-timer))
 
+(defun my-files-agent-shell--finish-codex-refresh (threads)
+  "Store enriched Codex THREADS and refresh their browser rows."
+  (let ((same-layout
+         (and (not my-files-agent-shell--codex-error)
+              (my-files-agent-shell--same-codex-row-layout-p
+               my-files-agent-shell--codex-threads
+               threads))))
+    (setq my-files-agent-shell--codex-threads threads
+          my-files-agent-shell--codex-error nil
+          my-files-agent-shell--codex-refreshing nil
+          my-files-agent-shell--codex-last-refresh-time (float-time))
+    (if same-layout
+        (progn
+          (my-files-agent-shell--update-codex-status-labels threads)
+          (my-files-agent-shell--update-chat-row-indicators))
+      (my-files-agent-shell--schedule-refresh))
+    (my-files-agent-shell--start-codex-refresh-timer)))
+
 (defun my-files-agent-shell--codex-list-page (session cursor threads)
   "Fetch one Codex task page using SESSION after CURSOR and THREADS."
   (codex-ide--request-async
@@ -1361,23 +1551,9 @@ When BUFFERS is nil, use all live buffers returned by `agent-shell-buffers'."
          (if next-cursor
              (my-files-agent-shell--codex-list-page
               session next-cursor all-threads)
-           (let ((same-layout
-                  (and (not my-files-agent-shell--codex-error)
-                       (my-files-agent-shell--same-codex-row-layout-p
-                        my-files-agent-shell--codex-threads
-                        all-threads))))
-             (setq my-files-agent-shell--codex-threads all-threads
-                   my-files-agent-shell--codex-error nil
-                   my-files-agent-shell--codex-refreshing nil
-                   my-files-agent-shell--codex-last-refresh-time
-                   (float-time))
-             (if same-layout
-                 (progn
-                   (my-files-agent-shell--update-codex-status-labels
-                    all-threads)
-                   (my-files-agent-shell--update-chat-row-indicators))
-               (my-files-agent-shell--schedule-refresh))
-             (my-files-agent-shell--start-codex-refresh-timer))))))))
+           (my-files-agent-shell--enrich-codex-runtime-statuses
+            all-threads
+            #'my-files-agent-shell--finish-codex-refresh)))))))
 
 (defun my-files-agent-shell--codex-list-threads (session)
   "Refresh cached Codex tasks using initialized SESSION."

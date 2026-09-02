@@ -1641,6 +1641,53 @@
       (when (buffer-live-p chat)
         (kill-buffer chat)))))
 
+(ert-deftest my-files-agent-shell-codex-status-labels-use-local-runtime-state ()
+  (dolist (case
+           '(("active" . "[busy]")
+             ("completed" . "[ready]")
+             ("interrupted" . "[ready]")
+             ("failed" . "[error]")))
+    (should
+     (equal
+      (my-files-agent-shell--codex-thread-status-label
+       `((status . ((type . "notLoaded")))
+         (my-files-agent-shell-local-runtime-status . ,(car case))))
+      (cdr case))))
+  (should
+   (equal
+    (my-files-agent-shell--codex-thread-status-label
+     '((status . ((type . "notLoaded")))))
+    "[unknown]"))
+  (should
+   (equal
+    (my-files-agent-shell--codex-thread-status-label
+     '((status . ((type . "active")))
+       (my-files-agent-shell-local-runtime-status . "completed")))
+    "[busy]")))
+
+(ert-deftest my-files-agent-shell-codex-local-status-requires-live-writer-lock ()
+  (let* ((turn-statuses
+          (my-files-agent-shell--parse-codex-turn-statuses
+           (concat "running\tinProgress\n"
+                   "stale\tinProgress\n"
+                   "done\tcompleted\n"
+                   "broken\tfailed\n")))
+         (locked-threads
+          (my-files-agent-shell--parse-codex-writer-locks
+           (concat "/tmp/thread-writer-locks/running.lock\n"
+                   "/tmp/thread-writer-locks/done.lock\n")))
+         (threads
+          '(((id . "running") (status . ((type . "notLoaded"))))
+            ((id . "stale") (status . ((type . "notLoaded"))))
+            ((id . "done") (status . ((type . "notLoaded"))))
+            ((id . "broken") (status . ((type . "notLoaded"))))))
+         (enriched
+          (my-files-agent-shell--apply-codex-local-statuses
+           threads turn-statuses locked-threads)))
+    (should
+     (equal (mapcar #'my-files-agent-shell--codex-thread-status-label enriched)
+            '("[busy]" "[unknown]" "[ready]" "[error]")))))
+
 (ert-deftest my-files-agent-shell-codex-poll-updates-only-status-brackets ()
   (my-files-agent-shell-test--with-state
       ((my-files-agent-shell--selected-project default-directory))
@@ -1670,6 +1717,10 @@
                    (funcall callback
                             `((data . ,(list second active-first)))
                             nil)))
+                ((symbol-function
+                  'my-files-agent-shell--enrich-codex-runtime-statuses)
+                 (lambda (threads callback)
+                   (funcall callback threads)))
                 ((symbol-function 'my-files-agent-shell--schedule-refresh)
                  (lambda (&rest _arguments)
                    (cl-incf refresh-count))))
@@ -1682,7 +1733,7 @@
             (should (string-match-p
                      "\\[busy\\] First Codex status" text))
             (should (string-match-p
-                     "\\[closed\\] Second Codex status" text))
+                     "\\[unknown\\] Second Codex status" text))
             (should (< (string-match "First Codex status" text)
                        (string-match "Second Codex status" text)))))))))
 
