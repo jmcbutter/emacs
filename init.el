@@ -53,6 +53,15 @@
   ((prog-mode text-mode help-mode org-agenda-mode).  #'hl-line-mode)
   ((prog-mode text-mode help-mode org-agenda-mode).  #'visual-line-mode)
   ((prog-mode).  #'display-line-numbers-mode)
+  ;; Precision scrolling runs off the end of a single tall image and
+  ;; snaps back to the top, and the plain wheel scrolls past it into
+  ;; blank space, so route the wheel to image-mode's own commands,
+  ;; which stop at the image's edges.
+  ((image-mode) . (lambda ()
+                    (setq-local scroll-margin 0)
+                    (setq-local pixel-scroll-precision-mode nil)
+                    (setq-local mwheel-scroll-up-function #'image-scroll-up)
+                    (setq-local mwheel-scroll-down-function #'image-scroll-down)))
   :custom
   (menu-bar-mode nil)
   (scroll-bar-mode nil)
