@@ -148,7 +148,7 @@ Binds `container', `specs' and `tpl' for BODY."
      (should (equal container (jmb/my-documents--current-container))))))
 
 (ert-deftest my-documents-spec-doc-real-templates ()
-  "Every live template fills all its placeholders."
+  "Every live template has a description and fills all its placeholders."
   (let* ((JMB/MY-DOCUMENTS-DIRECTORY (expand-file-name "~/Dropbox/My Documents/"))
          (templates (mapcan #'jmb/spec-doc-templates (jmb/spec-doc-palettes))))
     (skip-unless templates)
@@ -156,10 +156,12 @@ Binds `container', `specs' and `tpl' for BODY."
      (let ((container (expand-file-name "Files/PROJECT - Foo" JMB/MY-DOCUMENTS-DIRECTORY))
            (n 0))
        (pcase-dolist (`(,name . ,path) templates)
+         (should (jmb/spec-doc-description path))
          (let ((text (my-documents-test--read
                       (jmb/spec-doc-create container path
                                            (format "%s %d" name (cl-incf n))))))
-           (should-not (string-match-p "{{" text))))))))
+           (should-not (string-match-p "{{" text))
+           (should-not (string-match-p jmb/spec-doc--description-regexp text))))))))
 
 (provide 'my-documents-test)
 ;;; my-documents-test.el ends here

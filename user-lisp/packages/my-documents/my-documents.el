@@ -239,11 +239,30 @@ DIGITS is nil unless NAME ends in \"-\" and zeros."
   (format "[[file:%s][%s]]" (file-name-nondirectory file)
           (jmb/spec-doc--label file)))
 
+(defconst jmb/spec-doc--description-regexp
+  "^\\(?:#\\+\\|' \\)template:[ \t]*\\(.*\\)$"
+  "Matches a template's description line.
+In an Org template it is \"#+template: TEXT\" and in a PlantUML
+template \"' template: TEXT\".  It says when to use the template, is
+shown when choosing one, and is left out of the files it creates.")
+
+(defun jmb/spec-doc-description (template)
+  "Return the description line of TEMPLATE, or nil if it has none."
+  (with-temp-buffer
+    (insert-file-contents template nil 0 4096)
+    (goto-char (point-min))
+    (when (re-search-forward jmb/spec-doc--description-regexp nil t)
+      (string-trim (match-string 1)))))
+
 (defun jmb/spec-doc--fill (template values)
   "Return TEMPLATE text with each {{KEY}} replaced from VALUES.
 VALUES is an alist of (KEY . STRING)."
   (with-temp-buffer
     (insert-file-contents template)
+    (goto-char (point-min))
+    (while (re-search-forward jmb/spec-doc--description-regexp nil t)
+      (delete-region (match-beginning 0)
+                     (min (point-max) (1+ (match-end 0)))))
     (dolist (pair values)
       (goto-char (point-min))
       (let ((token (format "{{%s}}" (car pair))))
@@ -333,14 +352,19 @@ Return the new file's path."
 (defun jmb/spec-doc--read-template (palette)
   "Ask for one of PALETTE's templates and return its path."
   (let* ((templates (jmb/spec-doc-templates palette))
+         (width (apply #'max 0 (mapcar (lambda (c) (string-width (car c)))
+                                       templates)))
          (annotate
           (lambda (name)
             (let ((path (cdr (assoc name templates))))
-              (format "  %s, %s"
-                      (if (equal (file-name-extension path) "puml")
-                          "diagram" "document")
-                      (file-name-nondirectory
-                       (directory-file-name (file-name-directory path)))))))
+              (concat
+               (make-string (- (1+ width) (string-width name)) ?\s)
+               (format "%-8s %-17s %s"
+                       (if (equal (file-name-extension path) "puml")
+                           "diagram" "document")
+                       (file-name-nondirectory
+                        (directory-file-name (file-name-directory path)))
+                       (or (jmb/spec-doc-description path) ""))))))
          (completion-extra-properties (list :annotation-function annotate)))
     (unless templates
       (user-error "No templates for palette %s" palette))
