@@ -187,8 +187,10 @@
 
 (autoload 'jmb/new-project "my-documents" nil t)
 (autoload 'jmb/new-area "my-documents" nil t)
+(autoload 'jmb/new-spec-doc "my-documents" nil t)
 (define-key jmb/org-global-prefix-map (kbd "n") 'jmb/new-project)
 (define-key jmb/org-global-prefix-map (kbd "N") 'jmb/new-area)
+(define-key jmb/org-global-prefix-map (kbd "s") 'jmb/new-spec-doc)
 
 (define-key global-map (kbd "C-c o") jmb/org-global-prefix-map)
 
