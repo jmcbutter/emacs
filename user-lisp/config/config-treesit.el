@@ -3,7 +3,7 @@
 ;;; Code:
 
 (use-package treesit
-  :ensure t)
+  :ensure nil)
 
 
 (provide 'config-treesit)
