@@ -186,6 +186,21 @@ RECORD-NAME before converting.  The source buffer is never modified.
 (fn BEGIN END &optional RECORD-NAME)" t)
 (register-definition-prefixes "packages/xml-to-table/xml-to-table" '("xml-to-table-"))
 
+
+
+;;; Generated autoloads from packages/my-documents/my-documents.el
+
+(autoload 'jmb/new-project "packages/my-documents/my-documents"
+"Create a new project's Files folder and Planning file.
+With prefix ARG, choose which pieces to create.
+
+(fn ARG)" t)
+(autoload 'jmb/new-area "packages/my-documents/my-documents"
+"Create a new area's Files folder, Planning file and Roadmap.
+With prefix ARG, choose which pieces to create.
+
+(fn ARG)" t)
+(register-definition-prefixes "packages/my-documents/my-documents" '("JMB/" "jmb/my-documents-"))
 
 ;;; End of scraped data
 
