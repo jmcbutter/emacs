@@ -145,8 +145,20 @@ With prefix ARG, choose which pieces to create."
 (defconst JMB/COMMON-PALETTE "Common"
   "Template folder whose templates every palette offers.")
 
-(defvar jmb/spec-doc--last-palette nil
-  "The palette chosen last, offered as the default next time.")
+(defvar jmb/spec-doc-container-history nil
+  "Projects and areas chosen in `jmb/new-spec-doc', newest first.")
+
+(defvar jmb/spec-doc-palette-history nil
+  "Palettes chosen in `jmb/new-spec-doc', newest first.")
+
+(defvar jmb/spec-doc-template-history nil
+  "Templates chosen in `jmb/new-spec-doc', newest first.")
+
+(defvar jmb/spec-doc-title-history nil
+  "Titles entered in `jmb/new-spec-doc', newest first.")
+
+(defvar jmb/spec-doc-spec-history nil
+  "Parent Specs chosen in `jmb/new-spec-doc', newest first.")
 
 (defun jmb/my-documents--templates-directory ()
   "Return the directory holding the palette template folders."
@@ -369,7 +381,8 @@ Return the new file's path."
     (unless templates
       (user-error "No templates for palette %s" palette))
     (cdr (assoc (completing-read (format "%s template: " palette)
-                                 templates nil t)
+                                 templates nil t nil
+                                 'jmb/spec-doc-template-history)
                 templates))))
 
 ;;;###autoload
@@ -385,22 +398,26 @@ in the container's \"00 - Specs and Reqs\" folder."
            (expand-file-name
             (completing-read "Project or area: "
                              (mapcar #'file-name-nondirectory containers)
-                             nil t nil nil
-                             (and current (file-name-nondirectory current)))
+                             nil t nil 'jmb/spec-doc-container-history
+                             (if current
+                                 (file-name-nondirectory current)
+                               (car jmb/spec-doc-container-history)))
             (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY)))
           (palette (completing-read "Palette: " (jmb/spec-doc-palettes)
-                                    nil t nil nil jmb/spec-doc--last-palette))
-          (template (progn (setq jmb/spec-doc--last-palette palette)
-                           (jmb/spec-doc--read-template palette)))
+                                    nil t nil 'jmb/spec-doc-palette-history
+                                    (car jmb/spec-doc-palette-history)))
+          (template (jmb/spec-doc--read-template palette))
           (prefix (car (jmb/spec-doc--parse-name (file-name-base template))))
-          (title (read-string (format "%s title: " prefix)))
+          (title (read-string (format "%s title: " prefix) nil
+                              'jmb/spec-doc-title-history))
           (specs (and (equal prefix "SLICE")
                       (jmb/spec-doc--specs
                        (expand-file-name JMB/SPECS-AND-REQS-DIRECTORY-NAME
                                          container))))
           (parent (and specs
                        (let ((choice (completing-read
-                                      "Spec (empty for none): " specs nil t)))
+                                      "Spec (empty for none): " specs nil t nil
+                                      'jmb/spec-doc-spec-history)))
                          (unless (string-empty-p choice) choice)))))
      (list container template title parent)))
   (find-file (jmb/spec-doc-create container template title parent)))
