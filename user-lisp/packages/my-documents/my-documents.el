@@ -157,6 +157,9 @@ With prefix ARG, choose which pieces to create."
 (defvar jmb/spec-doc-title-history nil
   "Titles entered in `jmb/new-spec-doc', newest first.")
 
+(defvar jmb/spec-doc-find-history nil
+  "Spec docs chosen in `jmb/find-spec-doc', newest first.")
+
 (defvar jmb/spec-doc-spec-history nil
   "Parent Specs chosen in `jmb/new-spec-doc', newest first.")
 
@@ -385,6 +388,78 @@ Return the new file's path."
                                  'jmb/spec-doc-template-history)
                 templates))))
 
+(defun jmb/spec-doc--read-container ()
+  "Ask for a project or area folder and return its full path.
+The default is the one holding `default-directory', else the last chosen."
+  (let ((current (jmb/my-documents--current-container)))
+    (expand-file-name
+     (completing-read "Project or area: "
+                      (mapcar #'file-name-nondirectory
+                              (jmb/my-documents--containers))
+                      nil t nil 'jmb/spec-doc-container-history
+                      (if current
+                          (file-name-nondirectory current)
+                        (car jmb/spec-doc-container-history)))
+     (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY))))
+
+(defconst JMB/SPEC-DOC-GENERATED-EXTENSIONS '("png" "svg" "tex")
+  "Extensions of files rendered from spec docs, left out when finding one.")
+
+(defun jmb/spec-doc-files (container)
+  "Return the spec docs in CONTAINER's specs folder, newest first.
+Rendered images and LaTeX output are left out."
+  (let ((dir (expand-file-name JMB/SPECS-AND-REQS-DIRECTORY-NAME container)))
+    (when (file-directory-p dir)
+      (sort (seq-remove
+             (lambda (f)
+               (or (member (file-name-extension f)
+                           JMB/SPEC-DOC-GENERATED-EXTENSIONS)
+                   (string-suffix-p "~" f)
+                   (string-prefix-p "." (file-name-nondirectory f))))
+             (directory-files-recursively dir "" nil))
+            (lambda (a b)
+              (time-less-p (file-attribute-modification-time
+                            (file-attributes b))
+                           (file-attribute-modification-time
+                            (file-attributes a))))))))
+
+;;;###autoload
+(defun jmb/find-spec-doc (file)
+  "Visit FILE, a spec doc in a project or area's specs folder.
+Ask for the project or area, then for one of its spec docs, newest
+first, each shown with the date it last changed."
+  (interactive
+   (let* ((container (jmb/spec-doc--read-container))
+          (dir (expand-file-name JMB/SPECS-AND-REQS-DIRECTORY-NAME container))
+          (files (or (jmb/spec-doc-files container)
+                     (user-error "No spec docs in %s"
+                                 (file-name-nondirectory container))))
+          (names (mapcar (lambda (f) (cons (file-relative-name f dir) f))
+                         files))
+          (width (apply #'max 0 (mapcar (lambda (n) (string-width (car n)))
+                                        names)))
+          (table (lambda (string pred action)
+                   (if (eq action 'metadata)
+                       `(metadata
+                         (display-sort-function . identity)
+                         (annotation-function
+                          . ,(lambda (name)
+                               (concat
+                                (make-string
+                                 (- (1+ width) (string-width name)) ?\s)
+                                (format-time-string
+                                 "%Y-%m-%d"
+                                 (file-attribute-modification-time
+                                  (file-attributes
+                                   (cdr (assoc name names)))))))))
+                     (complete-with-action action names string pred)))))
+     (list (cdr (assoc (completing-read
+                        (format "%s spec doc: "
+                                (file-name-nondirectory container))
+                        table nil t nil 'jmb/spec-doc-find-history)
+                       names)))))
+  (find-file file))
+
 ;;;###autoload
 (defun jmb/new-spec-doc (container template title &optional parent)
   "Create a specs or requirements document or diagram and visit it.
@@ -392,17 +467,7 @@ Ask for the project or area CONTAINER, a palette, one of its
 TEMPLATEs, the TITLE and, for a Slice, its PARENT Spec.  The file goes
 in the container's \"00 - Specs and Reqs\" folder."
   (interactive
-   (let* ((containers (jmb/my-documents--containers))
-          (current (jmb/my-documents--current-container))
-          (container
-           (expand-file-name
-            (completing-read "Project or area: "
-                             (mapcar #'file-name-nondirectory containers)
-                             nil t nil 'jmb/spec-doc-container-history
-                             (if current
-                                 (file-name-nondirectory current)
-                               (car jmb/spec-doc-container-history)))
-            (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY)))
+   (let* ((container (jmb/spec-doc--read-container))
           (palette (completing-read "Palette: " (jmb/spec-doc-palettes)
                                     nil t nil 'jmb/spec-doc-palette-history
                                     (car jmb/spec-doc-palette-history)))

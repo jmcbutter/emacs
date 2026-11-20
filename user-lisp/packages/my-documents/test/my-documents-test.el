@@ -147,6 +147,16 @@ Binds `container', `specs' and `tpl' for BODY."
    (let ((default-directory (file-name-as-directory specs)))
      (should (equal container (jmb/my-documents--current-container))))))
 
+(ert-deftest my-documents-spec-doc-files-newest-first ()
+  (my-documents-test--with-container
+   (let ((container-for-test container))
+     (let ((old (my-documents-test--create "Software" "BRD" "Old"))
+           (new (my-documents-test--create "Software" "SWIMLANE" "New")))
+       (set-file-times old (time-subtract nil 100))
+       (my-documents-test--write (expand-file-name "SWIMLANE - New.png" specs) "")
+       (my-documents-test--write (expand-file-name "BRD - Old.org~" specs) "")
+       (should (equal (list new old) (jmb/spec-doc-files container)))))))
+
 (ert-deftest my-documents-spec-doc-real-templates ()
   "Every live template has a description and fills all its placeholders."
   (let* ((JMB/MY-DOCUMENTS-DIRECTORY (expand-file-name "~/Dropbox/My Documents/"))
