@@ -4,7 +4,7 @@
 
 (with-eval-after-load 'org
   (setq-default org-edit-src-content-indentation 4)
-  (let ((scale 1.1))
+  (let ((scale 1.015))
     (set-face-attribute 'org-level-1 nil :height (expt scale 5) :weight 'medium :slant 'normal)
     (set-face-attribute 'org-level-2 nil :height (expt scale 4) :weight 'medium :slant 'normal)
     (set-face-attribute 'org-level-3 nil :height (expt scale 3) :weight 'medium :slant 'normal)

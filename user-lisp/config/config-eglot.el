@@ -4,7 +4,8 @@
 
 (use-package eglot
   :hook
-  ((typescript-ts-mode . eglot-ensure))
+  ((typescript-ts-mode . eglot-ensure)
+   (tsx-ts-mode . eglot-ensure))
   :ensure t
   :custom
   (eglot-code-action-indications nil)

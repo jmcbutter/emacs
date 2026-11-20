@@ -50,9 +50,9 @@
 ;; UI
 (use-package emacs
   :hook
-  ((prog-mode text-mode help-mode org-agenda-mode).  #'hl-line-mode)
-  ((prog-mode text-mode help-mode org-agenda-mode).  #'visual-line-mode)
-  ((prog-mode).  #'display-line-numbers-mode)
+  ((prog-mode text-mode help-mode org-agenda-mode) .  #'hl-line-mode)
+  ((prog-mode text-mode help-mode org-agenda-mode) .  #'visual-line-mode)
+  ((prog-mode) .  #'display-line-numbers-mode)
   ;; Precision scrolling runs off the end of a single tall image and
   ;; snaps back to the top, and the plain wheel scrolls past it into
   ;; blank space, so route the wheel to image-mode's own commands,
@@ -70,7 +70,18 @@
   (global-hl-line-mode nil)
   (display-fill-column-indicator-column 80)
   (whitespace-style '(face tabs tab-mark trailing))
-  (inhibit-startup-screen t))
+  (inhibit-startup-screen t)
+  (mouse-wheel-tilt-scroll t)
+  (mouse-wheel-scroll-amount-horizontal 5)
+  (mwheel-scroll-left-function
+        (lambda (&optional _arg _set-minimum)
+          (scroll-left mouse-wheel-scroll-amount-horizontal)))
+
+  (mwheel-scroll-right-function
+        (lambda (&optional _arg _set-minimum)
+          (scroll-right mouse-wheel-scroll-amount-horizontal)))
+  (pixel-scroll-precision-mode t)
+  (auto-window-vscroll t))
 
 ;; Editing
 (use-package emacs
@@ -202,20 +213,62 @@ installed."
    start end
    "pandoc -f markdown -t org --wrap=preserve" t t))
 
-
-(use-package plantuml-mode
-  :ensure t
-  :custom
-  (plantuml-jar-path "~/Src/plantuml.jar")
-  (plantuml-default-exec-mode 'jar))
-
 (use-package xclip
-  :ensure t)
+  :ensure t
+  :demand t
+  :config
+  (xclip-mode))
 
 (use-package clipetty
   :ensure t
   :config
   (global-clipetty-mode 1))
+
+(use-package eca
+  :ensure t)
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Light/Dark Mode
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(require 'dbus)
+
+(defvar my-light-theme 'modus-operandi-tinted)
+(defvar my-dark-theme 'modus-vivendi)
+
+(defun my-system-dark-p ()
+  (string-match-p
+   "prefer-dark"
+   (car (process-lines
+         "gsettings"
+         "get"
+         "org.gnome.desktop.interface"
+         "color-scheme"))))
+
+(defun my-apply-system-theme (&rest _)
+  (mapc #'disable-theme custom-enabled-themes)
+  (load-theme
+   (if (my-system-dark-p)
+       my-dark-theme
+     my-light-theme)
+   t))
+
+;; Apply current theme at startup.
+(my-apply-system-theme)
+
+;; React to changes from the desktop portal.
+(dbus-register-signal
+ :session
+ nil
+ "/org/freedesktop/portal/desktop"
+ "org.freedesktop.portal.Settings"
+ "SettingChanged"
+ (lambda (namespace key _value)
+   (when (and (equal namespace "org.freedesktop.appearance")
+              (equal key "color-scheme"))
+     (my-apply-system-theme))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; User Lisp
@@ -226,9 +279,13 @@ installed."
 (require 'config-web-mode)
 (require 'config-llm)
 (require 'config-magit)
+(require 'config-pdf)
 (require 'config-treesit)
 (require 'config-which-key)
 
 (require 'lang-liquid)
 (require 'lang-markdown)
 (require 'lang-org)
+(require 'lang-puml)
+(put 'scroll-left 'disabled nil)
+(put 'dired-find-alternate-file 'disabled nil)

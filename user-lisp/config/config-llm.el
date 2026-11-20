@@ -3,8 +3,6 @@
 ;;; Code:
 
 (declare-function agent-shell-openai-make-authentication "agent-shell-openai")
-(declare-function my-files-agent-shell-agent-data-directory
-                  "my-files-agent-shell")
 
 (defun my-agent-shell--codex-acp-auth-method-compat (args)
   "Translate old Codex ACP auth method ids to codex-acp 1.1 ids."
@@ -22,9 +20,6 @@
   (agent-shell-header-style 'text)
   (agent-shell-preferred-agent-config 'codex)
   :config
-  (require 'my-files-agent-shell)
-  (setq agent-shell-dot-subdir-function
-        #'my-files-agent-shell-agent-data-directory)
   (with-eval-after-load 'acp
     (unless (advice-member-p #'my-agent-shell--codex-acp-auth-method-compat
                              'acp-make-authenticate-request)
@@ -34,17 +29,6 @@
 
   (setq agent-shell-openai-authentication
         (agent-shell-openai-make-authentication :login t)))
-
-(use-package my-files-agent-shell
-  :ensure nil
-  :after agent-shell
-  :commands (my-files-agent-shell-open
-             my-files-agent-shell-close
-             my-files-agent-shell-focus-browser
-             my-files-agent-shell-select-area
-             my-files-agent-shell-select-project
-             my-files-agent-shell-select-scope
-             my-files-agent-shell-toggle))
 
 (use-package gptel
   :ensure t

@@ -52,6 +52,10 @@
 ;; (add-to-list 'default-frame-alist '(font . "JetBrains Mono")) ;; Set your favorite font
 (setq-default line-spacing 0.12)
 
+
+(add-to-list 'user-lisp-ignored-directories "test")
+
+
 (prefer-coding-system 'utf-8)
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
@@ -67,3 +71,5 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  )
+
+

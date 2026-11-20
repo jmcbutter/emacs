@@ -7,11 +7,14 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Global Variables
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defvar JMB/ORG-DIRECTORY (expand-file-name "Agenda" "~/Dropbox/"))
+(defvar JMB/ORG-DIRECTORY (expand-file-name "Agenda" "~/Dropbox/My Documents/"))
+(defvar JMB/ROADMAPS-DIRECTORY (expand-file-name "Roadmaps" "~/Dropbox/My Documents/"))
+(defvar JMB/PLANS-DIRECTORY (expand-file-name "Planning" "~/Dropbox/My Documents/"))
 (defvar JMB/ORG-AGENDA-FILE (expand-file-name "agenda.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-CALENDAR-FILE (expand-file-name "calendar.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-JOURNAL-FILE (expand-file-name "journal.org" JMB/ORG-DIRECTORY))
 (defvar JMB/ORG-MEETINGS-FILE (expand-file-name "meetings.org" JMB/ORG-DIRECTORY))
+(defvar JMB/ORG-TICKETS-FILE (expand-file-name "tickets.org" JMB/ORG-DIRECTORY))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Org Configuration
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -122,20 +125,37 @@
                     (tags-todo "+WAIT"
                                ((org-agenda-overriding-header "--- Wait ---")))
                     (tags-todo "+TODAY-PAUSE"
-                               ((org-agenda-overriding-header "--- Today ---")))
+                               ((org-agenda-overriding-header "--- Today ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
                     (tags-todo "+THIS_WEEK-TODAY-PAUSE"
-                               ((org-agenda-overriding-header "--- This Week ---")))
+                               ((org-agenda-overriding-header "--- This Week ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
                     (tags-todo "+THIS_MONTH-THIS_WEEK-PAUSE"
-                               ((org-agenda-overriding-header "--- This Month ---")))
+                               ((org-agenda-overriding-header "--- This Month ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
                     (tags-todo "+THIS_QUARTER-THIS_MONTH-PAUSE"
-                               ((org-agenda-overriding-header "--- This Quarter ---")))
+                               ((org-agenda-overriding-header "--- This Quarter ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
                     (tags-todo "+THIS_YEAR-THIS_QUARTER-PAUSE"
-                               ((org-agenda-overriding-header "--- This Year ---")))
-                    (tags-todo "-THIS_YEAR-INBOX-PAUSE"
-                               ((org-agenda-overriding-header "--- Sometime ---")))
+                               ((org-agenda-overriding-header "--- This Year ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
+                    (tags-todo "+SOMETIME-THIS_YEAR-INBOX-PAUSE"
+                               ((org-agenda-overriding-header "--- Sometime ---")
+                                (org-agenda-skip-function '(org-agenda-skip-entry-if 'timestamp))))
                     (tags-todo "+HOLD"
                                ((org-agenda-overriding-header "--- On Hold ---"))))
-                   ((org-agenda-span 1))))))
+                   ((org-agenda-span 1)
+                    (org-agenda-tag-filter-preset '("-TICKET"))))
+                  ("p" "Tickets"
+                   ((alltodo ""
+                             ((org-agenda-overriding-header "--- PLANS ---")
+                              (org-agenda-files `(,JMB/PLANS-DIRECTORY))
+                              (org-agenda-todo-list-sublevels nil)))))
+                  ("r" "Roadmaps"
+                   ((alltodo ""
+                               ((org-agenda-overriding-header "--- ROADMAPS ---")
+                                (org-agenda-files `(,JMB/ROADMAPS-DIRECTORY))
+                                (org-agenda-todo-list-sublevels nil))))))))
 
 
 
