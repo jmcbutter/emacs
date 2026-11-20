@@ -7,54 +7,6 @@
 
 
 
-;;; Generated autoloads from minor-modes/dumb-indent-mode.el
-
-(register-definition-prefixes "minor-modes/dumb-indent-mode" '("dumb-"))
-
-
-;;; Generated autoloads from init/init-linux.el
-
-(register-definition-prefixes "init/init-linux" '("liquid-mode"))
-
-
-;;; Generated autoloads from init/init-org.el
-
-(register-definition-prefixes "init/init-org" '("JMB/ORG-" "jmb/"))
-
-
-;;; Generated autoloads from lang/lang-liquid.el
-
-(register-definition-prefixes "lang/lang-liquid" '("liquid-mode"))
-
-
-;;; Generated autoloads from packages/shopify-liquid-docs.el
-
-(autoload 'shopify-liquid-docs-filters "packages/shopify-liquid-docs"
-"Browse Shopify Liquid filters with completion." t)
-(autoload 'shopify-liquid-docs-objects "packages/shopify-liquid-docs"
-"Browse Shopify Liquid objects with completion." t)
-(autoload 'shopify-liquid-docs-tags "packages/shopify-liquid-docs"
-"Browse Shopify Liquid tags with completion." t)
-(autoload 'shopify-liquid-docs-search "packages/shopify-liquid-docs"
-"Search across all Shopify Liquid filters, objects, and tags." t)
-(autoload 'shopify-liquid-docs-lookup "packages/shopify-liquid-docs"
-"Look up the symbol at point in Shopify Liquid docs." t)
-(autoload 'shopify-liquid-docs-refresh "packages/shopify-liquid-docs"
-"Re-download and reload all documentation data." t)
-(register-definition-prefixes "packages/shopify-liquid-docs" '("shopify-liquid-docs-"))
-
-
-;;; Generated autoloads from config/config-org.el
-
-(register-definition-prefixes "config/config-org" '("JMB/ORG-" "jmb/"))
-
-
-
-;;; Generated autoloads from config/config-agent-shell.el
-
-(register-definition-prefixes "config/config-agent-shell" '("my-agent-shell--codex-acp-auth-method-compat"))
-
-
 ;;; Generated autoloads from config/config-agenda.el
 
 (register-definition-prefixes "config/config-agenda" '("JMB/" "jmb/"))
@@ -65,127 +17,14 @@
 (register-definition-prefixes "config/config-llm" '("jmb/llm-global-prefix-map" "my-agent-shell--codex-acp-auth-method-compat"))
 
 
-;;; Generated autoloads from packages/jmb-org-workflow.el
+;;; Generated autoloads from minor-modes/dumb-indent-mode.el
 
-(autoload 'jmb/org-workflow-setup "packages/jmb-org-workflow"
-"Configure Org capture, states, agenda, and key bindings." t)
-(autoload 'jmb/org-workflow-agenda "packages/jmb-org-workflow"
-"Open the workflow agenda." t)
-(autoload 'jmb/org-workflow-advance "packages/jmb-org-workflow"
-"Choose a valid next state for the current workflow entry." t)
-(autoload 'jmb/org-workflow-triage "packages/jmb-org-workflow"
-"Clarify, categorize, and deduplicate the current entry." t)
-(autoload 'jmb/org-workflow-mark-contacted "packages/jmb-org-workflow"
-"Record that responsible parties were contacted and wait for a response." t)
-(autoload 'jmb/org-workflow-group-ticket "packages/jmb-org-workflow"
-"Assign the current ticket to a worktree group." t)
-(autoload 'jmb/org-workflow-dispatch "packages/jmb-org-workflow"
-"Apply the urgent/needs-you decision matrix to the current ticket." t)
-(autoload 'jmb/org-workflow-provision-worktree "packages/jmb-org-workflow"
-"Provision a worktree and tmux session for the current NEXT ticket." t)
-(autoload 'jmb/org-workflow-set-dev-port "packages/jmb-org-workflow"
-"Prefix the current ticket's tmux session with its development port." t)
-(autoload 'jmb/org-workflow-archive "packages/jmb-org-workflow"
-"Archive the current DONE or CANCELLED workflow entry." t)
-(register-definition-prefixes "packages/jmb-org-workflow" '("jmb/org-workflow-"))
-
+(register-definition-prefixes "minor-modes/dumb-indent-mode" '("dumb-"))
 
 
-;;; Generated autoloads from utilities/eaveside-worktree-launcher.el
+;;; Generated autoloads from lang/lang-liquid.el
 
-(register-definition-prefixes "utilities/eaveside-worktree-launcher" '("create-tmux-session" "worktree-launcher/"))
-
-
-;;; Generated autoloads from packages/business-analyst/business-analyst.el
-
-(autoload 'business-analyst-next "packages/business-analyst/business-analyst"
-"Complete the current question and move to the next one." t)
-(autoload 'business-analyst-previous "packages/business-analyst/business-analyst"
-"Move to the previous question without changing completion state." t)
-(autoload 'business-analyst-skip "packages/business-analyst/business-analyst"
-"Mark the current question skipped and move to the next one." t)
-(autoload 'business-analyst-mode "packages/business-analyst/business-analyst"
-"Guide business analysis through questions persisted in the current Org file.
-
-This is a minor mode.  If called interactively, toggle the
-`Business-Analyst mode' mode.  If the prefix argument is positive,
-enable the mode, and if it is zero or negative, disable the mode.
-
-If called from Lisp, toggle the mode if ARG is `toggle'.  Enable the
-mode if ARG is nil, omitted, or is a positive number.  Disable the mode
-if ARG is a negative number.
-
-To check whether the minor mode is enabled in the current buffer,
-evaluate the variable `business-analyst-mode'.
-
-The mode's hook is called both when the mode is enabled and when it is
-disabled.
-
-(fn &optional ARG)" t)
-(autoload 'business-analyst-resume "packages/business-analyst/business-analyst"
-"Open and resume the business-analysis Org project at FILE.
-
-(fn FILE)" t)
-(autoload 'business-analyst-start "packages/business-analyst/business-analyst"
-"Create a business-analysis Org project at FILE named TITLE.
-
-If FILE is an existing business-analysis project, resume it without changing
-its contents.  Refuse to overwrite any other non-empty file.
-
-(fn FILE TITLE)" t)
-(register-definition-prefixes "packages/business-analyst/business-analyst" '("business-analyst-"))
-
-
-;;; Generated autoloads from packages/business-analyst/test/business-analyst-test.el
-
-(register-definition-prefixes "packages/business-analyst/test/business-analyst-test" '("business-analyst-test--with-project"))
-
-
-;;; Generated autoloads from packages/my-files-agent-shell.el
-
-(autoload 'my-files-agent-shell-focus-browser "packages/my-files-agent-shell"
-"Open the browser if needed, then focus its Chats panel." t)
-(autoload 'my-files-agent-shell-refresh "packages/my-files-agent-shell"
-"Rescan projects, agent-shell chats, and cached Codex tasks." t)
-(autoload 'my-files-agent-shell-open "packages/my-files-agent-shell"
-"Open the Chats and main conversation workspace." t)
-(autoload 'my-files-agent-shell-close "packages/my-files-agent-shell"
-"Close the browser and restore the previous window configuration." t)
-(autoload 'my-files-agent-shell-toggle "packages/my-files-agent-shell"
-"Toggle the My Files agent-shell browser workspace." t)
-(register-definition-prefixes "packages/my-files-agent-shell" '("my-files-agent-shell-"))
-
-
-;;; Generated autoloads from packages/my-files-agent-shell-test.el
-
-(register-definition-prefixes "packages/my-files-agent-shell-test" '("my-files-agent-shell-test--"))
-
-
-;;; Generated autoloads from packages/xml-to-table/xml-to-table.el
-
-(autoload 'xml-to-table-convert-string "packages/xml-to-table/xml-to-table"
-"Convert XML into a matrix suitable for a spreadsheet.
-
-The return value is a list of rows.  The first row contains column names and
-the remaining rows contain string values.  RECORD-NAME is a string or symbol
-naming the element represented by each row.  When it is nil, infer the record
-element from repeated sibling elements.
-
-(fn XML &optional RECORD-NAME)")
-(autoload 'xml-to-table-export-csv "packages/xml-to-table/xml-to-table"
-"Export the current XML spreadsheet values to CSV FILE.
-
-(fn FILE)" t)
-(autoload 'xml-to-table "packages/xml-to-table/xml-to-table"
-"Open XML between BEGIN and END as an editable SES spreadsheet.
-
-Interactively, use the active region or the whole accessible buffer.  Infer
-the repeated record element by default.  With a prefix argument, prompt for
-RECORD-NAME before converting.  The source buffer is never modified.
-
-(fn BEGIN END &optional RECORD-NAME)" t)
-(register-definition-prefixes "packages/xml-to-table/xml-to-table" '("xml-to-table-"))
-
+(register-definition-prefixes "lang/lang-liquid" '("liquid-mode"))
 
 
 ;;; Generated autoloads from packages/my-documents/my-documents.el
