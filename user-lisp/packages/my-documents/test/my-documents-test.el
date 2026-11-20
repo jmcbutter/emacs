@@ -72,6 +72,12 @@ Binds `container' and `specs' for BODY."
        (when (string-suffix-p ".org" (nth 1 (assoc type JMB/SPEC-DOC-TYPES)))
          (should (string-match-p "^:ID: +[0-9a-f-]\\{36\\}$" text)))))))
 
+(ert-deftest my-documents-spec-doc-c4-label ()
+  (my-documents-test--with-container
+   (let ((path (jmb/spec-doc-create container "C4 L2 Container diagram" "CRM")))
+     (should (equal "C4-L2 CONTAINER - CRM.puml" (file-name-nondirectory path)))
+     (should (string-match-p "^title C4 L2 Container: CRM$" (my-documents-test--read path))))))
+
 (ert-deftest my-documents-spec-doc-diagram ()
   (my-documents-test--with-container
    (let ((path (jmb/spec-doc-create container "Sequence diagram" "Checkout")))
