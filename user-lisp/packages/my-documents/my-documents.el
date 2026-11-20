@@ -14,11 +14,13 @@
 ;; Existing files and folders are never overwritten.  With a prefix
 ;; argument, the commands ask which of the pieces to create.
 ;;
-;; `jmb/new-spec-doc' creates a BRD, PRD, SRS, TDD, ADR, Spec, Slice or
-;; PlantUML diagram in a project or area's "00 - Specs and Reqs" folder
-;; from the Org and .puml templates in `JMB/MY-DOCUMENTS-DIRECTORY'/Templates/.  Templates use
-;; {{ID}}, {{TITLE}}, {{DATE}}, {{OWNER}}, {{CONTAINER}}, {{NUMBER}} and
-;; {{PARENT}} placeholders.
+;; `jmb/new-spec-doc' creates a document or PlantUML diagram in a
+;; project or area's "00 - Specs and Reqs" folder from a template in a
+;; palette folder under `JMB/MY-DOCUMENTS-DIRECTORY'/Templates/, such
+;; as Software, Civil Engineering or Life.  Templates use {{ID}},
+;; {{TITLE}}, {{DATE}}, {{OWNER}}, {{CONTAINER}}, {{NUMBER}} and
+;; {{PARENT}} placeholders.  See "Specs and requirements documents"
+;; below for how template names become file names.
 
 ;;; Code:
 
@@ -128,50 +130,73 @@ With prefix ARG, choose which pieces to create."
 
 ;;;; Specs and requirements documents
 
-(defvar JMB/SPEC-DOC-TYPES
-  '(("BRD" "BRD.org" "BRD" nil)
-    ("PRD" "PRD.org" "PRD" nil)
-    ("SRS" "SRS.org" "SRS" nil)
-    ("TDD" "TDD.org" "TDD" nil)
-    ("ADR" "ADR.org" "ADR" 4)
-    ("Spec" "Spec.org" "SPEC" 2)
-    ("Slice" "Slice.org" "SLICE" 2)
-    ("C4 L1 Context diagram" "C4-L1 Context.puml" "C4-L1 CONTEXT" nil)
-    ("C4 L2 Container diagram" "C4-L2 Container.puml" "C4-L2 CONTAINER" nil)
-    ("C4 L3 Component diagram" "C4-L3 Component.puml" "C4-L3 COMPONENT" nil)
-    ("Sequence diagram" "Sequence.puml" "SEQUENCE" nil)
-    ("Activity diagram" "Activity.puml" "ACTIVITY" nil)
-    ("State diagram" "State.puml" "STATE" nil)
-    ("Data model" "Data Model.puml" "ERD" nil)
-    ("Domain model" "Domain Model.puml" "DOMAIN" nil)
-    ("Use case diagram" "Use Case.puml" "USECASE" nil)
-    ("Deployment diagram" "Deployment.puml" "DEPLOYMENT" nil))
-  "Document types for `jmb/new-spec-doc'.
-Each entry is (TYPE TEMPLATE PREFIX DIGITS).  The new file takes the
-template's extension, so .puml templates make PlantUML diagrams.  When
-DIGITS is non-nil, documents of that type are numbered per folder with
-that many digits.")
+;; Templates live in palette folders under Templates/, such as
+;; Templates/Software/ or Templates/Life/, plus Templates/Common/ for
+;; templates every palette offers.  A palette template overrides a
+;; Common one with the same file name.
+;;
+;; A template's file name is the prefix of the files it creates:
+;; SEQUENCE.puml creates "SEQUENCE - <Title>.puml".  A name ending in
+;; "-" and zeros is numbered per folder with that many digits:
+;; ADR-0000.org creates "ADR-0001 - <Title>.org".  Files starting with
+;; "_" are support files: they are never offered, but are copied into
+;; the folder when a new file's text mentions them.
+
+(defconst JMB/COMMON-PALETTE "Common"
+  "Template folder whose templates every palette offers.")
+
+(defvar jmb/spec-doc--last-palette nil
+  "The palette chosen last, offered as the default next time.")
 
 (defun jmb/my-documents--templates-directory ()
-  "Return the directory holding the spec document templates."
+  "Return the directory holding the palette template folders."
   (expand-file-name "Templates" JMB/MY-DOCUMENTS-DIRECTORY))
 
-(defun jmb/my-documents--containers ()
-  "Return the project and area folders under Files/."
-  (let ((files (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY)))
-    (when (file-directory-p files)
-      (seq-filter #'file-directory-p
-                  (directory-files files t "\\`\\(PROJECT\\|AREA\\) - ")))))
+(defun jmb/spec-doc--hidden-p (name)
+  "Return non-nil if file NAME is not a template to offer."
+  (or (string-prefix-p "_" name)
+      (string-prefix-p "." name)
+      (string-suffix-p "~" name)))
 
-(defun jmb/my-documents--current-container ()
-  "Return the project or area folder containing `default-directory', if any."
-  (let ((dir (expand-file-name default-directory)))
-    (seq-find (lambda (c) (string-prefix-p (file-name-as-directory c) dir))
-              (jmb/my-documents--containers))))
+(defun jmb/spec-doc-palettes ()
+  "Return the names of the template palettes, without Common."
+  (let ((dir (jmb/my-documents--templates-directory)))
+    (and (file-directory-p dir)
+         (seq-filter
+          (lambda (name)
+            (and (not (jmb/spec-doc--hidden-p name))
+                 (not (equal name JMB/COMMON-PALETTE))
+                 (file-directory-p (expand-file-name name dir))))
+          (directory-files dir nil "\\`[^.]")))))
+
+(defun jmb/spec-doc--palette-files (palette)
+  "Return the regular files in PALETTE's template folder."
+  (let ((dir (expand-file-name palette (jmb/my-documents--templates-directory))))
+    (and (file-directory-p dir)
+         (seq-filter #'file-regular-p (directory-files dir t "\\`[^.]")))))
+
+(defun jmb/spec-doc-templates (palette)
+  "Return an alist of (NAME . PATH) for the templates PALETTE offers.
+NAME is the template's file name without its extension.  PALETTE's
+own templates override Common templates with the same name."
+  (let (result)
+    (dolist (source (list JMB/COMMON-PALETTE palette))
+      (dolist (path (jmb/spec-doc--palette-files source))
+        (let ((name (file-name-base path)))
+          (unless (jmb/spec-doc--hidden-p (file-name-nondirectory path))
+            (setf (alist-get name result nil nil #'equal) path)))))
+    (sort result (lambda (a b) (string< (car a) (car b))))))
+
+(defun jmb/spec-doc--parse-name (name)
+  "Split template NAME into (PREFIX . DIGITS).
+DIGITS is nil unless NAME ends in \"-\" and zeros."
+  (if (string-match "\\`\\(.+\\)-\\(0+\\)\\'" name)
+      (cons (match-string 1 name) (length (match-string 2 name)))
+    (cons name nil)))
 
 (defun jmb/spec-doc--prefix-regexp (prefix)
   "Return a regexp matching numbered file names that start with PREFIX."
-  (concat "\\`" (regexp-quote prefix) "-\\([0-9]+\\) - .*\\.org\\'"))
+  (concat "\\`" (regexp-quote prefix) "-\\([0-9]+\\) - "))
 
 (defun jmb/spec-doc--next-number (dir prefix)
   "Return the next free number for PREFIX documents in DIR."
@@ -186,12 +211,26 @@ that many digits.")
 (defun jmb/spec-doc--specs (dir)
   "Return the Spec document file names in DIR."
   (and (file-directory-p dir)
-       (directory-files dir nil (jmb/spec-doc--prefix-regexp "SPEC"))))
+       (directory-files dir nil (concat (jmb/spec-doc--prefix-regexp "SPEC")
+                                        ".*\\.org\\'"))))
+
+(defun jmb/my-documents--containers ()
+  "Return the project and area folders under Files/."
+  (let ((files (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY)))
+    (when (file-directory-p files)
+      (seq-filter #'file-directory-p
+                  (directory-files files t "\\`\\(PROJECT\\|AREA\\) - ")))))
+
+(defun jmb/my-documents--current-container ()
+  "Return the project or area folder containing `default-directory', if any."
+  (let ((dir (expand-file-name default-directory)))
+    (seq-find (lambda (c) (string-prefix-p (file-name-as-directory c) dir))
+              (jmb/my-documents--containers))))
 
 (defun jmb/spec-doc--label (file)
   "Return a link label such as \"SPEC-01: Title\" for FILE."
   (let ((base (file-name-base file)))
-    (if (string-match "\\`\\([A-Z]+-[0-9]+\\) - \\(.*\\)\\'" base)
+    (if (string-match "\\`\\(.+?\\) - \\(.*\\)\\'" base)
         (concat (match-string 1 base) ": " (match-string 2 base))
       base)))
 
@@ -226,18 +265,39 @@ VALUES is an alist of (KEY . STRING)."
       (insert "\n- " (jmb/spec-doc--link slice-file))
       (write-region nil nil spec-file nil 'silent))))
 
-(defun jmb/spec-doc-create (container type title &optional parent)
-  "Create a TYPE document titled TITLE in CONTAINER's specs folder.
-CONTAINER is a project or area folder.  PARENT, for a Slice, is the
-file name of its Spec in the same folder.  Return the new file's path."
-  (let* ((entry (or (assoc type JMB/SPEC-DOC-TYPES)
-                    (user-error "Unknown document type: %s" type)))
-         (title (string-trim title))
+(defun jmb/spec-doc--support-files (template)
+  "Return the support files beside TEMPLATE or in Common.
+Support files are those whose names start with \"_\"."
+  (let ((dirs (list (file-name-directory template)
+                    (expand-file-name JMB/COMMON-PALETTE
+                                      (jmb/my-documents--templates-directory)))))
+    (seq-filter #'file-regular-p
+                (apply #'append
+                       (mapcar (lambda (d)
+                                 (and (file-directory-p d)
+                                      (directory-files d t "\\`_")))
+                               dirs)))))
+
+(defun jmb/spec-doc--copy-support-files (template text dir values)
+  "Copy into DIR the support files of TEMPLATE that TEXT mentions.
+Fill their placeholders from VALUES.  Existing files are left alone."
+  (dolist (support (jmb/spec-doc--support-files template))
+    (let ((name (file-name-nondirectory support)))
+      (when (and (string-search name text)
+                 (not (file-exists-p (expand-file-name name dir))))
+        (with-temp-file (expand-file-name name dir)
+          (insert (jmb/spec-doc--fill support values)))))))
+
+(defun jmb/spec-doc-create (container template title &optional parent)
+  "Create a document titled TITLE in CONTAINER's specs folder from TEMPLATE.
+CONTAINER is a project or area folder and TEMPLATE a template file.
+PARENT, for a Slice, is the file name of its Spec in the same folder.
+Return the new file's path."
+  (let* ((title (string-trim title))
+         (parsed (jmb/spec-doc--parse-name (file-name-base template)))
+         (prefix (car parsed))
+         (digits (cdr parsed))
          (dir (expand-file-name JMB/SPECS-AND-REQS-DIRECTORY-NAME container))
-         (template (expand-file-name (nth 1 entry)
-                                     (jmb/my-documents--templates-directory)))
-         (prefix (nth 2 entry))
-         (digits (nth 3 entry))
          (number (and digits (format (format "%%0%dd" digits)
                                      (jmb/spec-doc--next-number dir prefix))))
          (name (concat prefix (and number (concat "-" number)) " - "
@@ -247,34 +307,53 @@ file name of its Spec in the same folder.  Return the new file's path."
          (parent-path (and parent (expand-file-name parent dir))))
     (when (string-empty-p title)
       (user-error "Title must not be empty"))
-    (unless (file-exists-p template)
+    (unless (file-regular-p template)
       (user-error "No template at %s" template))
     (when (file-exists-p path)
       (user-error "%s already exists" (abbreviate-file-name path)))
     (make-directory dir t)
-    (with-temp-file path
-      (insert (jmb/spec-doc--fill
-               template
-               `(("ID" . ,(org-id-uuid))
-                 ("TITLE" . ,title)
-                 ("DATE" . ,(format-time-string "%Y-%m-%d"))
-                 ("OWNER" . ,(or user-full-name ""))
-                 ("CONTAINER" . ,(file-name-nondirectory
-                                  (directory-file-name container)))
-                 ("NUMBER" . ,(or number ""))
-                 ("PARENT" . ,(if parent-path
-                                  (jmb/spec-doc--link parent-path)
-                                "its spec"))))))
+    (let* ((values `(("ID" . ,(org-id-uuid))
+                     ("TITLE" . ,title)
+                     ("DATE" . ,(format-time-string "%Y-%m-%d"))
+                     ("OWNER" . ,(or user-full-name ""))
+                     ("CONTAINER" . ,(file-name-nondirectory
+                                      (directory-file-name container)))
+                     ("NUMBER" . ,(or number ""))
+                     ("PARENT" . ,(if parent-path
+                                      (jmb/spec-doc--link parent-path)
+                                    "its spec"))))
+           (text (jmb/spec-doc--fill template values)))
+      (with-temp-file path (insert text))
+      (jmb/spec-doc--copy-support-files
+       template text dir (cons '("ID" . "") (cdr values))))
     (when parent-path
       (jmb/spec-doc--add-to-spec parent-path path))
     path))
 
+(defun jmb/spec-doc--read-template (palette)
+  "Ask for one of PALETTE's templates and return its path."
+  (let* ((templates (jmb/spec-doc-templates palette))
+         (annotate
+          (lambda (name)
+            (let ((path (cdr (assoc name templates))))
+              (format "  %s, %s"
+                      (if (equal (file-name-extension path) "puml")
+                          "diagram" "document")
+                      (file-name-nondirectory
+                       (directory-file-name (file-name-directory path)))))))
+         (completion-extra-properties (list :annotation-function annotate)))
+    (unless templates
+      (user-error "No templates for palette %s" palette))
+    (cdr (assoc (completing-read (format "%s template: " palette)
+                                 templates nil t)
+                templates))))
+
 ;;;###autoload
-(defun jmb/new-spec-doc (container type title &optional parent)
+(defun jmb/new-spec-doc (container template title &optional parent)
   "Create a specs or requirements document or diagram and visit it.
-Ask for the project or area CONTAINER, the document TYPE, its TITLE
-and, for a Slice, its PARENT Spec.  The document goes in the
-container's \"00 - Specs and Reqs\" folder."
+Ask for the project or area CONTAINER, a palette, one of its
+TEMPLATEs, the TITLE and, for a Slice, its PARENT Spec.  The file goes
+in the container's \"00 - Specs and Reqs\" folder."
   (interactive
    (let* ((containers (jmb/my-documents--containers))
           (current (jmb/my-documents--current-container))
@@ -285,10 +364,13 @@ container's \"00 - Specs and Reqs\" folder."
                              nil t nil nil
                              (and current (file-name-nondirectory current)))
             (expand-file-name "Files" JMB/MY-DOCUMENTS-DIRECTORY)))
-          (type (completing-read "Document type: "
-                                 (mapcar #'car JMB/SPEC-DOC-TYPES) nil t))
-          (title (read-string (format "%s title: " type)))
-          (specs (and (equal type "Slice")
+          (palette (completing-read "Palette: " (jmb/spec-doc-palettes)
+                                    nil t nil nil jmb/spec-doc--last-palette))
+          (template (progn (setq jmb/spec-doc--last-palette palette)
+                           (jmb/spec-doc--read-template palette)))
+          (prefix (car (jmb/spec-doc--parse-name (file-name-base template))))
+          (title (read-string (format "%s title: " prefix)))
+          (specs (and (equal prefix "SLICE")
                       (jmb/spec-doc--specs
                        (expand-file-name JMB/SPECS-AND-REQS-DIRECTORY-NAME
                                          container))))
@@ -296,8 +378,8 @@ container's \"00 - Specs and Reqs\" folder."
                        (let ((choice (completing-read
                                       "Spec (empty for none): " specs nil t)))
                          (unless (string-empty-p choice) choice)))))
-     (list container type title parent)))
-  (find-file (jmb/spec-doc-create container type title parent)))
+     (list container template title parent)))
+  (find-file (jmb/spec-doc-create container template title parent)))
 
 (provide 'my-documents)
 ;;; my-documents.el ends here
