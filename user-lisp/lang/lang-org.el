@@ -29,5 +29,26 @@
                        org-babel-load-languages)))
   (add-hook 'org-babel-after-execute-hook #'org-redisplay-inline-images))
 
+(defvar org-latex-default-packages-alist)
+
+(with-eval-after-load 'ox-latex
+  ;; Org loads these LaTeX packages for every PDF export, but a basic
+  ;; TeX Live install lacks some (wrapfig, ulem and capt-of are in
+  ;; texlive-latex-extra).  Leave out any LaTeX can't find, so export
+  ;; works now and picks them up once they're installed.
+  (when (executable-find "kpsewhich")
+    (setq org-latex-default-packages-alist
+          (seq-filter
+           (lambda (entry)
+             (let ((pkg (nth 1 entry)))
+               (or (member pkg '("inputenc" "fontenc" "fontspec" "amsmath"
+                                 "amssymb" "graphicx" "hyperref"))
+                   (not (string-empty-p
+                         (string-trim
+                          (shell-command-to-string
+                           (concat "kpsewhich "
+                                   (shell-quote-argument (concat pkg ".sty"))))))))))
+           org-latex-default-packages-alist))))
+
 (provide 'lang-org)
 ;;; lang-org.el ends here
