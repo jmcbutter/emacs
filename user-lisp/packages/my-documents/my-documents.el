@@ -14,9 +14,9 @@
 ;; Existing files and folders are never overwritten.  With a prefix
 ;; argument, the commands ask which of the pieces to create.
 ;;
-;; `jmb/new-spec-doc' creates a BRD, PRD, SRS, TDD, ADR, Spec or Slice in
-;; a project or area's "00 - Specs and Reqs" folder from the Org
-;; templates in `JMB/MY-DOCUMENTS-DIRECTORY'/Templates/.  Templates use
+;; `jmb/new-spec-doc' creates a BRD, PRD, SRS, TDD, ADR, Spec, Slice or
+;; PlantUML diagram in a project or area's "00 - Specs and Reqs" folder
+;; from the Org and .puml templates in `JMB/MY-DOCUMENTS-DIRECTORY'/Templates/.  Templates use
 ;; {{ID}}, {{TITLE}}, {{DATE}}, {{OWNER}}, {{CONTAINER}}, {{NUMBER}} and
 ;; {{PARENT}} placeholders.
 
@@ -135,10 +135,22 @@ With prefix ARG, choose which pieces to create."
     ("TDD" "TDD.org" "TDD" nil)
     ("ADR" "ADR.org" "ADR" 4)
     ("Spec" "Spec.org" "SPEC" 2)
-    ("Slice" "Slice.org" "SLICE" 2))
+    ("Slice" "Slice.org" "SLICE" 2)
+    ("Context diagram" "Context.puml" "CONTEXT" nil)
+    ("Container diagram" "Container.puml" "CONTAINER" nil)
+    ("Component diagram" "Component.puml" "COMPONENT" nil)
+    ("Sequence diagram" "Sequence.puml" "SEQUENCE" nil)
+    ("Activity diagram" "Activity.puml" "ACTIVITY" nil)
+    ("State diagram" "State.puml" "STATE" nil)
+    ("Data model" "Data Model.puml" "ERD" nil)
+    ("Domain model" "Domain Model.puml" "DOMAIN" nil)
+    ("Use case diagram" "Use Case.puml" "USECASE" nil)
+    ("Deployment diagram" "Deployment.puml" "DEPLOYMENT" nil))
   "Document types for `jmb/new-spec-doc'.
-Each entry is (TYPE TEMPLATE PREFIX DIGITS).  When DIGITS is non-nil,
-documents of that type are numbered per folder with that many digits.")
+Each entry is (TYPE TEMPLATE PREFIX DIGITS).  The new file takes the
+template's extension, so .puml templates make PlantUML diagrams.  When
+DIGITS is non-nil, documents of that type are numbered per folder with
+that many digits.")
 
 (defun jmb/my-documents--templates-directory ()
   "Return the directory holding the spec document templates."
@@ -230,7 +242,7 @@ file name of its Spec in the same folder.  Return the new file's path."
                                      (jmb/spec-doc--next-number dir prefix))))
          (name (concat prefix (and number (concat "-" number)) " - "
                        (replace-regexp-in-string "[/\\\\:]" "-" title)
-                       ".org"))
+                       (file-name-extension template t)))
          (path (expand-file-name name dir))
          (parent-path (and parent (expand-file-name parent dir))))
     (when (string-empty-p title)
@@ -259,7 +271,7 @@ file name of its Spec in the same folder.  Return the new file's path."
 
 ;;;###autoload
 (defun jmb/new-spec-doc (container type title &optional parent)
-  "Create a specs or requirements document and visit it.
+  "Create a specs or requirements document or diagram and visit it.
 Ask for the project or area CONTAINER, the document TYPE, its TITLE
 and, for a Slice, its PARENT Spec.  The document goes in the
 container's \"00 - Specs and Reqs\" folder."

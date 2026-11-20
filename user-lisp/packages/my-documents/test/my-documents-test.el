@@ -69,7 +69,14 @@ Binds `container' and `specs' for BODY."
                   (jmb/spec-doc-create container type "My Doc"))))
        (should-not (string-match-p "{{" text))
        (should (string-match-p "PROJECT - Foo" text))
-       (should (string-match-p "^:ID: +[0-9a-f-]\\{36\\}$" text))))))
+       (when (string-suffix-p ".org" (nth 1 (assoc type JMB/SPEC-DOC-TYPES)))
+         (should (string-match-p "^:ID: +[0-9a-f-]\\{36\\}$" text)))))))
+
+(ert-deftest my-documents-spec-doc-diagram ()
+  (my-documents-test--with-container
+   (let ((path (jmb/spec-doc-create container "Sequence diagram" "Checkout")))
+     (should (equal "SEQUENCE - Checkout.puml" (file-name-nondirectory path)))
+     (should (string-match-p "^title Checkout$" (my-documents-test--read path))))))
 
 (ert-deftest my-documents-spec-doc-names-and-numbers ()
   (my-documents-test--with-container
