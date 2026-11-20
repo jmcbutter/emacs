@@ -185,6 +185,11 @@
 (define-key jmb/org-global-prefix-map (kbd "o") 'org-clock-out)
 (define-key jmb/org-global-prefix-map (kbd "p") 'org-clock-in-last)
 
+(autoload 'jmb/new-project "my-documents" nil t)
+(autoload 'jmb/new-area "my-documents" nil t)
+(define-key jmb/org-global-prefix-map (kbd "n") 'jmb/new-project)
+(define-key jmb/org-global-prefix-map (kbd "N") 'jmb/new-area)
+
 (define-key global-map (kbd "C-c o") jmb/org-global-prefix-map)
 
 
