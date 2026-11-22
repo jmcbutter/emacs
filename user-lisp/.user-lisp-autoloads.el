@@ -9,7 +9,7 @@
 
 ;;; Generated autoloads from config/config-agenda.el
 
-(register-definition-prefixes "config/config-agenda" '("JMB/" "jmb/"))
+(register-definition-prefixes "config/config-agenda" '("JMB/" "jmb/" "routine-checklist-prefix-map"))
 
 
 ;;; Generated autoloads from config/config-llm.el
@@ -27,6 +27,11 @@
 (register-definition-prefixes "lang/lang-liquid" '("liquid-mode"))
 
 
+;;; Generated autoloads from lang/lang-puml.el
+
+(register-definition-prefixes "lang/lang-puml" '("jmb/"))
+
+
 ;;; Generated autoloads from packages/my-documents/my-documents.el
 
 (autoload 'jmb/new-project "packages/my-documents/my-documents"
@@ -39,7 +44,39 @@ With prefix ARG, choose which pieces to create.
 With prefix ARG, choose which pieces to create.
 
 (fn ARG)" t)
-(register-definition-prefixes "packages/my-documents/my-documents" '("JMB/" "jmb/my-documents-"))
+(autoload 'jmb/find-spec-doc "packages/my-documents/my-documents"
+"Visit FILE, a spec doc in a project or area's specs folder.
+Ask for the project or area, then for one of its spec docs, newest
+first, each shown with the date it last changed.
+
+(fn FILE)" t)
+(autoload 'jmb/new-spec-doc "packages/my-documents/my-documents"
+"Create a specs or requirements document or diagram and visit it.
+Ask for the project or area CONTAINER, a palette, one of its
+TEMPLATEs, the TITLE and, for a Slice, its PARENT Spec.  The file goes
+in the container's \"00 - Specs and Reqs\" folder.
+
+(fn CONTAINER TEMPLATE TITLE &optional PARENT)" t)
+(register-definition-prefixes "packages/my-documents/my-documents" '("JMB/" "jmb/"))
+
+
+;;; Generated autoloads from packages/routine-checklist/routine-checklist.el
+
+(defvar-keymap routine-checklist-prefix-map :doc
+"Prefix keymap for Routine Checklist commands." "t" #'routine-checklist-manage-templates)
+(autoload 'routine-checklist-manage-templates "packages/routine-checklist/routine-checklist"
+"Open, create, or delete a routine checklist template." t)
+(register-definition-prefixes "packages/routine-checklist/routine-checklist" '("routine-checklist-"))
+
+
+;;; Generated autoloads from packages/routine-checklist/routine-checklist-store.el
+
+(register-definition-prefixes "packages/routine-checklist/routine-checklist-store" '("routine-checklist-"))
+
+
+;;; Generated autoloads from packages/routine-checklist/routine-checklist-template-mode.el
+
+(register-definition-prefixes "packages/routine-checklist/routine-checklist-template-mode" '("routine-checklist-"))
 
 ;;; End of scraped data
 
