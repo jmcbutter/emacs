@@ -63,10 +63,31 @@ in the container's \"00 - Specs and Reqs\" folder.
 ;;; Generated autoloads from packages/routine-checklist/routine-checklist.el
 
 (defvar-keymap routine-checklist-prefix-map :doc
-"Prefix keymap for Routine Checklist commands." "t" #'routine-checklist-manage-templates)
+"Prefix keymap for Routine Checklist commands." "t" #'routine-checklist-manage-templates "s" #'routine-checklist-start "o" #'routine-checklist-open "A" #'routine-checklist-open-archive)
 (autoload 'routine-checklist-manage-templates "packages/routine-checklist/routine-checklist"
 "Open, create, or delete a routine checklist template." t)
+(autoload 'routine-checklist-start "packages/routine-checklist/routine-checklist"
+"Start a smart checklist run from TEMPLATE-ID (or prompt for one).
+Honors the template's `:run-policy' (`concurrent' always starts a parallel
+run with optional LABEL; single-run policies offer to resume an existing
+active run or start fresh).
+
+(fn &optional TEMPLATE-ID LABEL NOW)" t)
+(autoload 'routine-checklist-open "packages/routine-checklist/routine-checklist"
+"Open an active routine checklist run." t)
+(autoload 'routine-checklist-open-archive "packages/routine-checklist/routine-checklist"
+"Open an archived routine checklist run read-only." t)
 (register-definition-prefixes "packages/routine-checklist/routine-checklist" '("routine-checklist-"))
+
+
+;;; Generated autoloads from packages/routine-checklist/routine-checklist-cadence.el
+
+(register-definition-prefixes "packages/routine-checklist/routine-checklist-cadence" '("routine-checklist-"))
+
+
+;;; Generated autoloads from packages/routine-checklist/routine-checklist-mode.el
+
+(register-definition-prefixes "packages/routine-checklist/routine-checklist-mode" '("routine-checklist-"))
 
 
 ;;; Generated autoloads from packages/routine-checklist/routine-checklist-store.el

@@ -19,7 +19,9 @@
 (require 'seq)
 (require 'subr-x)
 (require 'routine-checklist-store)
+(require 'routine-checklist-cadence)
 (require 'routine-checklist-template-mode)
+(require 'routine-checklist-mode)
 
 (defgroup routine-checklist nil
   "Routine checklists with smart per-item cadences."
@@ -40,10 +42,19 @@
 (defvar routine-checklist-template-history nil
   "Minibuffer history for choosing routine checklist templates.")
 
+(defvar routine-checklist-run-history nil
+  "Minibuffer history for choosing active routine checklist runs.")
+
+(defvar routine-checklist-archive-history nil
+  "Minibuffer history for choosing archived routine checklist runs.")
+
 ;;;###autoload
 (defvar-keymap routine-checklist-prefix-map
   :doc "Prefix keymap for Routine Checklist commands."
-  "t" #'routine-checklist-manage-templates)
+  "t" #'routine-checklist-manage-templates
+  "s" #'routine-checklist-start
+  "o" #'routine-checklist-open
+  "A" #'routine-checklist-open-archive)
 
 (defun routine-checklist--template-candidates (templates)
   "Return an alist of (DISPLAY . TEMPLATE) with unique display names."
@@ -150,6 +161,151 @@ When NO-CONFIRM is non-nil, skip confirmation."
      (t
       (when-let* ((tpl (cdr (assoc choice candidates))))
         (routine-checklist-template-open tpl t))))))
+
+;;;; Checklist runner entry points
+
+(defun routine-checklist--pick-template ()
+  "Prompt for an existing routine checklist template plist."
+  (let ((templates (routine-checklist-store-list-templates)))
+    (unless templates
+      (user-error "No routine templates yet; press C-c o k t to create one"))
+    (let* ((candidates (routine-checklist--template-candidates templates))
+           (width (apply #'max 0 (mapcar (lambda (c) (string-width (car c)))
+                                         candidates)))
+           (annotate
+            (lambda (choice)
+              (when-let* ((tpl (cdr (assoc choice candidates))))
+                (concat (make-string (max 1 (- (+ width 2)
+                                               (string-width choice)))
+                                     ?\s)
+                        (routine-checklist--template-annotation tpl)))))
+           (table (lambda (string pred action)
+                    (if (eq action 'metadata)
+                        `(metadata
+                          (display-sort-function . identity)
+                          (annotation-function . ,annotate))
+                      (complete-with-action action candidates string pred))))
+           (choice (completing-read "Start routine template: " table nil t nil
+                                    'routine-checklist-template-history)))
+      (cdr (assoc choice candidates)))))
+
+(defun routine-checklist--format-run-summary (run &optional include-status)
+  "Return a concise display summary for RUN.
+When INCLUDE-STATUS is non-nil, include completion status badge."
+  (let* ((tpl-name (or (plist-get run :template-name)
+                       (plist-get run :template-id)
+                       "Checklist"))
+         (label (plist-get run :label))
+         (ts (if include-status
+                 (or (plist-get run :closed-at) (plist-get run :started-at))
+               (plist-get run :started-at)))
+         (ts-short (routine-checklist--format-timestamp-short ts))
+         (summary (routine-checklist-progress-summary run))
+         (status-badge (when include-status
+                         (if (eq (plist-get run :status) 'archived-complete)
+                             " [complete]"
+                           " [incomplete]"))))
+    (format "%s%s  (%s%s — %d/%d due checked, %d remaining)"
+            tpl-name
+            (if (and label (not (string-empty-p label)))
+                (format " — %s" label)
+              "")
+            ts-short
+            (or status-badge "")
+            (plist-get summary :due-checked)
+            (plist-get summary :due)
+            (plist-get summary :remaining))))
+
+(defun routine-checklist--run-candidates (runs &optional include-status)
+  "Build unique (DISPLAY . RUN) alist from RUNS preserving order."
+  (let ((seen (make-hash-table :test #'equal)))
+    (mapcar
+     (lambda (run)
+       (let* ((base (routine-checklist--format-run-summary run include-status))
+              (count (1+ (gethash base seen 0)))
+              (_ (puthash base count seen))
+              (display (if (> count 1)
+                           (format "%s [%s]" base (plist-get run :id))
+                         base)))
+         (cons display run)))
+     runs)))
+
+(defun routine-checklist--pick-run (runs prompt history-var &optional include-status)
+  "Prompt user with PROMPT to pick from RUNS using HISTORY-VAR."
+  (let* ((candidates (routine-checklist--run-candidates runs include-status))
+         (table (lambda (string pred action)
+                  (if (eq action 'metadata)
+                      '(metadata (display-sort-function . identity))
+                    (complete-with-action action candidates string pred))))
+         (choice (completing-read prompt table nil t nil history-var)))
+    (cdr (assoc choice candidates))))
+
+;;;###autoload
+(defun routine-checklist-start (&optional template-id label now)
+  "Start a smart checklist run from TEMPLATE-ID (or prompt for one).
+Honors the template's `:run-policy' (`concurrent' always starts a parallel
+run with optional LABEL; single-run policies offer to resume an existing
+active run or start fresh)."
+  (interactive)
+  (let* ((interactive-picker (null template-id))
+         (tpl (if template-id
+                  (routine-checklist-store-load-template template-id)
+                (routine-checklist--pick-template)))
+         (tpl-id (plist-get tpl :id))
+         (policy (or (plist-get tpl :run-policy) 'carry-over))
+         (active-runs (routine-checklist-store-list-active-runs tpl-id))
+         (resumed nil))
+    (when (and active-runs
+               (not (eq policy 'concurrent))
+               (or interactive-picker (called-interactively-p 'any)))
+      (let ((action (completing-read
+                     (format "Active run exists for %s: "
+                             (plist-get tpl :name))
+                     '("Resume active run" "Start a fresh run")
+                     nil t)))
+        (when (equal action "Resume active run")
+          (setq resumed
+                (if (= (length active-runs) 1)
+                    (car active-runs)
+                  (routine-checklist--pick-run
+                   active-runs "Resume run: "
+                   'routine-checklist-run-history))))))
+    (if resumed
+        (routine-checklist-open-run-buffer resumed)
+      (let* ((chosen-label
+              (if (or label (and (not interactive-picker)
+                                 (not (called-interactively-p 'any))))
+                  label
+                (read-string "Run label (optional): ")))
+             (run (routine-checklist-instantiate-run tpl chosen-label now)))
+        (routine-checklist-store-save-run run)
+        (routine-checklist-open-run-buffer run)))))
+
+;;;###autoload
+(defun routine-checklist-open ()
+  "Open an active routine checklist run."
+  (interactive)
+  (let ((runs (routine-checklist-store-list-active-runs)))
+    (unless runs
+      (user-error "No active routine checklist runs"))
+    (let ((run (routine-checklist--pick-run
+                runs "Open active run: " 'routine-checklist-run-history)))
+      (routine-checklist-open-run-buffer run))))
+
+;;;###autoload
+(defun routine-checklist-open-archive ()
+  "Open an archived routine checklist run read-only."
+  (interactive)
+  (let ((runs (routine-checklist-store-list-archived-runs)))
+    (unless runs
+      (user-error "No archived routine checklist runs"))
+    (let* ((run (routine-checklist--pick-run
+                 runs "Open archived run: "
+                 'routine-checklist-archive-history t))
+           (path (routine-checklist-store-archived-run-path
+                  (plist-get run :id)
+                  (routine-checklist-store--archive-year run))))
+      (routine-checklist-open-run-buffer run path))))
 
 (provide 'routine-checklist)
 ;;; routine-checklist.el ends here

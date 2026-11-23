@@ -195,11 +195,15 @@
 (define-key jmb/org-global-prefix-map (kbd "S") 'jmb/find-spec-doc)
 
 (autoload 'routine-checklist-manage-templates "routine-checklist" nil t)
-(defvar routine-checklist-prefix-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "t") #'routine-checklist-manage-templates)
-    map)
+(autoload 'routine-checklist-start "routine-checklist" nil t)
+(autoload 'routine-checklist-open "routine-checklist" nil t)
+(autoload 'routine-checklist-open-archive "routine-checklist" nil t)
+(defvar routine-checklist-prefix-map (make-sparse-keymap)
   "Prefix keymap for Routine Checklist commands.")
+(define-key routine-checklist-prefix-map (kbd "t") #'routine-checklist-manage-templates)
+(define-key routine-checklist-prefix-map (kbd "s") #'routine-checklist-start)
+(define-key routine-checklist-prefix-map (kbd "o") #'routine-checklist-open)
+(define-key routine-checklist-prefix-map (kbd "A") #'routine-checklist-open-archive)
 (define-key jmb/org-global-prefix-map (kbd "k") routine-checklist-prefix-map)
 
 (define-key global-map (kbd "C-c o") jmb/org-global-prefix-map)

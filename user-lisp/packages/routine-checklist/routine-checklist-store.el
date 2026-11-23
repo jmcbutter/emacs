@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'parse-time)
 (require 'pp)
 (require 'seq)
 (require 'subr-x)
@@ -43,6 +44,14 @@
 (defconst routine-checklist-store-valid-cadence-boundaries
   '(calendar elapsed)
   "Valid `:boundary' values for a template item cadence.")
+
+(defconst routine-checklist-store-valid-run-statuses
+  '(active archived-complete archived-incomplete)
+  "Valid `:status' values for a routine checklist run.")
+
+(defconst routine-checklist-store-valid-item-states
+  '(pending checked skipped)
+  "Valid `:state' values for a routine checklist run item.")
 
 (defun routine-checklist-store--plist-p (obj)
   "Return non-nil if OBJ is a proper property list."
@@ -77,13 +86,18 @@
     (make-directory dir t))
   (routine-checklist-store--root-dir))
 
+(defun routine-checklist-store--validate-safe-id (id kind)
+  "Validate ID as a safe single-segment identifier for KIND."
+  (unless (and (stringp id)
+               (not (string-empty-p id))
+               (not (string-match-p "[/\\\\]" id))
+               (not (string-search ".." id)))
+    (error "Invalid routine checklist %s ID: %S" kind id))
+  id)
+
 (defun routine-checklist-store-template-path (template-id)
   "Return the `.eld' file path for TEMPLATE-ID."
-  (unless (and (stringp template-id)
-               (not (string-empty-p template-id))
-               (not (string-match-p "[/\\\\]" template-id))
-               (not (string-search ".." template-id)))
-    (error "Invalid routine checklist template ID: %S" template-id))
+  (routine-checklist-store--validate-safe-id template-id "template")
   (expand-file-name (concat template-id ".eld")
                     (routine-checklist-store-templates-dir)))
 
@@ -282,6 +296,212 @@ Return non-nil if the file existed and was deleted, nil otherwise."
     (when (file-exists-p path)
       (delete-file path nil)
       t)))
+
+;;;; Run persistence and archive
+
+(defun routine-checklist-store--validate-run-id (run-id)
+  "Validate RUN-ID as a safe run filename identifier."
+  (routine-checklist-store--validate-safe-id run-id "run"))
+
+(defun routine-checklist-store-generate-run-id (template-id &optional time)
+  "Generate a unique run ID for TEMPLATE-ID at TIME (default current time)."
+  (routine-checklist-store--validate-safe-id template-id "template")
+  (format "%s-%s-%s"
+          (format-time-string "%Y%m%dT%H%M%S" time)
+          template-id
+          (routine-checklist-store-generate-id 4)))
+
+(defun routine-checklist-store-active-run-path (run-id)
+  "Return the active `.eld' path for RUN-ID."
+  (routine-checklist-store--validate-run-id run-id)
+  (expand-file-name (concat run-id ".eld")
+                    (routine-checklist-store-active-runs-dir)))
+
+(defun routine-checklist-store--archive-year (run)
+  "Return the 4-digit archive year string for RUN."
+  (let ((ts (or (plist-get run :closed-at)
+                (plist-get run :started-at))))
+    (if (and (stringp ts)
+             (string-match "\\`\\([0-9]\\{4\\}\\)-" ts))
+        (match-string 1 ts)
+      (format-time-string "%Y"))))
+
+(defun routine-checklist-store-archived-run-path (run-id year)
+  "Return the archived `.eld' path for RUN-ID in YEAR."
+  (routine-checklist-store--validate-run-id run-id)
+  (unless (and (stringp year)
+               (string-match-p "\\`[0-9]\\{4\\}\\'" year))
+    (error "Invalid archive year: %S" year))
+  (expand-file-name (concat run-id ".eld")
+                    (expand-file-name year (routine-checklist-store-archive-runs-dir))))
+
+(defun routine-checklist-store--timestamp-epoch (ts)
+  "Parse ISO-8601 timestamp TS into epoch seconds, or 0.0 if absent."
+  (if (and (stringp ts) (not (string-empty-p ts)))
+      (condition-case nil
+          (if-let* ((parsed (parse-iso8601-time-string ts)))
+              (float-time parsed)
+            0.0)
+        (error 0.0))
+    0.0))
+
+(defun routine-checklist-store--validate-run (run)
+  "Validate RUN plist structure and fields, signaling on invalid data."
+  (unless (routine-checklist-store--plist-p run)
+    (error "Invalid routine checklist run: expected plist"))
+  (let ((version (plist-get run :schema-version))
+        (id (plist-get run :id))
+        (template-id (plist-get run :template-id))
+        (template-name (plist-get run :template-name))
+        (status (plist-get run :status))
+        (started-at (plist-get run :started-at))
+        (items (plist-get run :items)))
+    (when (and (plist-member run :schema-version)
+               (not (equal version routine-checklist-store-schema-version)))
+      (error "Unsupported run schema version: %S" version))
+    (routine-checklist-store--validate-run-id id)
+    (unless (and (stringp template-id) (not (string-empty-p template-id)))
+      (error "Invalid run :template-id: %S" template-id))
+    (unless (and (stringp template-name)
+                 (not (string-empty-p (string-trim template-name))))
+      (error "Invalid run :template-name: %S" template-name))
+    (unless (memq status routine-checklist-store-valid-run-statuses)
+      (error "Invalid run :status: %S" status))
+    (unless (and (stringp started-at) (not (string-empty-p started-at)))
+      (error "Invalid run :started-at: %S" started-at))
+    (unless (proper-list-p items)
+      (error "Invalid run :items (expected list): %S" items))
+    (dolist (item items)
+      (unless (routine-checklist-store--plist-p item)
+        (error "Invalid run item (expected plist): %S" item))
+      (unless (stringp (plist-get item :title))
+        (error "Invalid run item :title: %S" (plist-get item :title)))
+      (unless (memq (plist-get item :state)
+                    routine-checklist-store-valid-item-states)
+        (error "Invalid run item :state: %S" (plist-get item :state))))))
+
+(defun routine-checklist-store--ensure-schema-version (plist)
+  "Ensure PLIST has `:schema-version' set without stripping unknown keys."
+  (if (plist-member plist :schema-version)
+      plist
+    (routine-checklist-store--plist-put
+     plist :schema-version routine-checklist-store-schema-version)))
+
+(defun routine-checklist-store-save-run (run)
+  "Validate and atomically save active RUN plist to `runs/active/'.
+Preserves unknown plist keys for forward compatibility.  Return the
+saved file path."
+  (routine-checklist-store-ensure-dirs)
+  (routine-checklist-store--validate-run run)
+  (let* ((to-save (routine-checklist-store--ensure-schema-version run))
+         (path (routine-checklist-store-active-run-path
+                (plist-get to-save :id))))
+    (routine-checklist-store--atomic-write path to-save)))
+
+(defun routine-checklist-store-load-run (run-id &optional noerror)
+  "Load and return the active run plist for RUN-ID.
+When NOERROR is non-nil, return nil if the run file does not exist."
+  (let ((path (routine-checklist-store-active-run-path run-id)))
+    (if (file-exists-p path)
+        (routine-checklist-store--read-file path)
+      (unless noerror
+        (error "Active routine checklist run not found: %s" run-id)))))
+
+(defun routine-checklist-store--sort-runs-newest-first (runs key-fn)
+  "Sort RUNS descending by the timestamp returned by KEY-FN, then `:id'."
+  (sort runs
+        (lambda (a b)
+          (let ((ta (routine-checklist-store--timestamp-epoch (funcall key-fn a)))
+                (tb (routine-checklist-store--timestamp-epoch (funcall key-fn b))))
+            (if (/= ta tb)
+                (> ta tb)
+              (string> (or (plist-get a :id) "")
+                       (or (plist-get b :id) "")))))))
+
+(defun routine-checklist-store-list-active-runs (&optional template-id)
+  "Return active run plists from `runs/active/', newest first.
+Never scans `runs/archive/'.  When TEMPLATE-ID is non-nil, return only
+runs for that template."
+  (let ((dir (routine-checklist-store-active-runs-dir)))
+    (when (file-directory-p dir)
+      (let* ((files (seq-filter
+                     #'file-regular-p
+                     (directory-files dir t "\\`[^.].*\\.eld\\'")))
+             (runs (mapcar #'routine-checklist-store--read-file files))
+             (filtered (if template-id
+                           (seq-filter
+                            (lambda (r)
+                              (equal (plist-get r :template-id) template-id))
+                            runs)
+                         runs)))
+        (routine-checklist-store--sort-runs-newest-first
+         filtered (lambda (r) (plist-get r :started-at)))))))
+
+(defun routine-checklist-store-archive-run (run)
+  "Move finished RUN atomically into `runs/archive/<YYYY>/'.
+Writes the archive file first, and deletes the active file only after
+the write succeeds.  Return the archived file path."
+  (routine-checklist-store--validate-run run)
+  (unless (memq (plist-get run :status)
+                '(archived-complete archived-incomplete))
+    (error "Cannot archive run with status %S" (plist-get run :status)))
+  (routine-checklist-store-ensure-dirs)
+  (let* ((to-save (routine-checklist-store--ensure-schema-version run))
+         (id (plist-get to-save :id))
+         (year (routine-checklist-store--archive-year to-save))
+         (archive-path (routine-checklist-store-archived-run-path id year))
+         (active-path (routine-checklist-store-active-run-path id)))
+    (routine-checklist-store--atomic-write archive-path to-save)
+    (when (file-exists-p active-path)
+      (delete-file active-path nil))
+    archive-path))
+
+(defun routine-checklist-store--archive-files ()
+  "Return all non-hidden `.eld' file paths under `runs/archive/'."
+  (let ((dir (routine-checklist-store-archive-runs-dir)))
+    (when (file-directory-p dir)
+      (seq-filter
+       (lambda (f)
+         (and (file-regular-p f)
+              (string-match-p "\\`[^.].*\\.eld\\'"
+                              (file-name-nondirectory f))))
+       (directory-files-recursively
+        dir "\\`[^.]" nil
+        (lambda (sub)
+          (not (string-prefix-p "." (file-name-nondirectory sub)))))))))
+
+(defun routine-checklist-store-list-archived-runs (&optional template-id)
+  "Return archived run plists, sorted newest first by `:closed-at'.
+When TEMPLATE-ID is non-nil, return only runs for that template."
+  (when-let* ((files (routine-checklist-store--archive-files)))
+    (let* ((runs (mapcar #'routine-checklist-store--read-file files))
+           (filtered (if template-id
+                         (seq-filter
+                          (lambda (r)
+                            (equal (plist-get r :template-id) template-id))
+                          runs)
+                       runs)))
+      (routine-checklist-store--sort-runs-newest-first
+       filtered
+       (lambda (r)
+         (or (plist-get r :closed-at)
+             (plist-get r :started-at)))))))
+
+(defun routine-checklist-store-load-archived-run (id-or-path &optional noerror)
+  "Load and return an archived run by run ID or file path ID-OR-PATH.
+When NOERROR is non-nil, return nil if not found."
+  (let ((path (if (and (stringp id-or-path)
+                       (file-regular-p id-or-path))
+                  id-or-path
+                (routine-checklist-store--validate-run-id id-or-path)
+                (seq-find
+                 (lambda (f)
+                   (equal (file-name-base f) id-or-path))
+                 (routine-checklist-store--archive-files)))))
+    (if path
+        (routine-checklist-store--read-file path)
+      (unless noerror
+        (error "Archived routine checklist run not found: %s" id-or-path)))))
 
 (provide 'routine-checklist-store)
 ;;; routine-checklist-store.el ends here
