@@ -296,6 +296,7 @@ installed."
 (require 'config-treesit)
 (require 'config-which-key)
 
+(require 'lang-autolisp)
 (require 'lang-liquid)
 (require 'lang-markdown)
 (require 'lang-org)
