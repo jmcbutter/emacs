@@ -52,6 +52,15 @@
      (when (search-forward "^" nil t) (delete-char -1))
      ,@body))
 
+(defmacro autolisp-test-dcl (text &rest body)
+  (declare (indent 1))
+  `(with-temp-buffer
+     (insert ,text)
+     (autolisp-dcl-mode)
+     (goto-char (point-min))
+     (when (search-forward "^" nil t) (delete-char -1))
+     ,@body))
+
 (defmacro autolisp-test-with-copies (&rest body)
   "Run BODY with DIR bound to a copy of the fixtures."
   (declare (indent 0))
@@ -175,33 +184,122 @@
 
 ;;;; Completion and eldoc
 
-(defun autolisp-test-complete ()
-  "Return the completions at point."
+(defun autolisp-test-complete (&optional n)
+  "Return the first N completions at point, as they would be shown."
   (pcase (autolisp-completion-at-point)
     (`(,beg ,_end ,table . ,_)
-     (all-completions (buffer-substring-no-properties beg (point)) table))))
+     (let* ((input (buffer-substring-no-properties beg (point)))
+            (all (completion-all-completions input table nil (length input)
+                                             (completion-metadata input table nil)))
+            (last (last all)))
+       (when last (setcdr last nil))
+       (let ((sorted (mapcar #'substring-no-properties
+                             (autolisp-complete--sort all input))))
+         (if n (seq-take sorted n) sorted))))))
 
-(ert-deftest autolisp-complete-code ()
-  (autolisp-test-with "(defun my-helper (x) x)\n(vl-string-^"
-    (should (member "vl-string-trim" (autolisp-test-complete))))
-  (autolisp-test-with "(defun my-helper (x) x)\n(my-^"
-    (should (member "my-helper" (autolisp-test-complete))))
-  (autolisp-test-with "(VL-STRING-T^"
-    (should (member "VL-STRING-TRIM" (autolisp-test-complete))))
-  (autolisp-test-with "; (vl-str^"
-    (should-not (autolisp-test-complete))))
+(defconst autolisp-test-code
+  "(setq globalCount 0)
+(defun MyHelper (x / other) (setq other x))
+(defun c:go (pickPoint / ss layerName) (setq ss (ssget) layerName \"0\")
+  ")
 
-(ert-deftest autolisp-complete-strings ()
-  (autolisp-test-with "(getvar \"DIMSC^\")"
-    (should (member "DIMSCALE" (autolisp-test-complete))))
-  (autolisp-test-with "(setvar \"dimsc^\" 1)"
-    (should (member "dimscale" (autolisp-test-complete))))
-  (autolisp-test-with "(command \"_.dimlin^\")"
-    (should (member "dimlinear" (autolisp-test-complete))))
-  (autolisp-test-with "(princ \"dimsc^\")"
-    (should-not (autolisp-test-complete))
-    (let ((autolisp-complete-commands-in t))
-      (should (autolisp-test-complete)))))
+(defun autolisp-test-complete-in (text &optional n)
+  "Complete at ^ in TEXT after `autolisp-test-code'."
+  (autolisp-test-with (concat autolisp-test-code text)
+    (autolisp-test-complete n)))
+
+(ert-deftest autolisp-complete-ranks-by-use ()
+  (should (equal (autolisp-test-complete-in "(st^" 1) '("strcat")))
+  (should (equal (autolisp-test-complete-in "(en^" 1) '("entget")))
+  (should (equal (autolisp-test-complete-in "(ca^" 1) '("car")))
+  (should (equal (autolisp-test-complete-in "(sub^" 2) '("subst" "substr")))
+  ;; What is typed in full comes first.
+  (should (equal (autolisp-test-complete-in "(set^" 1) '("set"))))
+
+(ert-deftest autolisp-complete-inside-words ()
+  (should (member "vl-string-trim" (autolisp-test-complete-in "(trim^" 5)))
+  (should (equal (autolisp-test-complete-in "(string-tr^" 1) '("vl-string-trim")))
+  (should (member "vl-string-search" (autolisp-test-complete-in "(vlstr^")))
+  (should (member "vl-string-trim" (autolisp-test-complete-in "(vl-s-t^" 3)))
+  (should (equal (autolisp-test-complete-in "(cnd^" 1) '("cond"))))
+
+(ert-deftest autolisp-complete-user-symbols ()
+  ;; As written, locals first.
+  (should (equal (autolisp-test-complete-in "(princ la^" 1) '("layerName")))
+  (should (equal (autolisp-test-complete-in "(princ pick^" 1) '("pickPoint")))
+  (should (equal (autolisp-test-complete-in "(myh^" 1) '("MyHelper")))
+  (should (equal (autolisp-test-complete-in "(princ glob^" 1) '("globalCount")))
+  ;; A variable is no use as an operator.
+  (should-not (member "layerName" (autolisp-test-complete-in "(la^")))
+  ;; Another function's local is offered, but not ahead of a built-in.
+  (should-not (equal (autolisp-test-complete-in "(princ o^" 1) '("other")))
+  ;; Not the word being typed.
+  (should-not (autolisp-test-complete-in "(princ zzqx^)")))
+
+(ert-deftest autolisp-complete-operator-or-argument ()
+  ;; SS is a variable and a prefix of functions.
+  (should (equal (autolisp-test-complete-in "(sslength s^" 1) '("ss")))
+  (should (member "ssget" (autolisp-test-complete-in "(ssg^" 1)))
+  (should (equal (autolisp-test-complete-in "(mapcar 'strc^" 1) '("strcat")))
+  ;; Only variables in an argument list.
+  (should-not (member "strcat" (autolisp-test-complete-in "(defun f (st^)")))
+  ;; An empty operator offers everything, an empty argument nothing.
+  (should (equal (autolisp-test-complete-in "(^" 3) '("c:go" "MyHelper" "setq")))
+  (should-not (autolisp-test-complete-in "(princ ^"))
+  (should-not (autolisp-test-complete-in "(+ 12^"))
+  (should-not (autolisp-test-complete-in "; (str^")))
+
+(ert-deftest autolisp-complete-case ()
+  (should (equal (autolisp-test-complete-in "(STRC^" 2) '("STRCAT" "STRCASE")))
+  (should (equal (autolisp-test-complete-in "(Strcat^" 1) '("strcat"))))
+
+(ert-deftest autolisp-complete-argument-values ()
+  (should (member "acRed" (autolisp-test-complete-in "(vla-put-color obj ac^" 10)))
+  (should (equal (autolisp-test-complete-in "(tblsearch \"^\")" 2) '("LAYER" "BLOCK")))
+  (should (equal (autolisp-test-complete-in "(tblnext \"la^\")" 1) '("LAYER")))
+  (should (equal (autolisp-test-complete-in "(getvar \"cmde^\")" 1) '("CMDECHO")))
+  (should (equal (autolisp-test-complete-in "(setvar \"os^\" 0)" 1) '("OSMODE")))
+  (should (equal (autolisp-test-complete-in "(getvar 'os^)" 1) '("osmode")))
+  (should (equal (autolisp-test-complete-in "(getvar \"^\")" 1) '("CMDECHO")))
+  (should (equal (autolisp-test-complete-in "(command \"_.la^\")" 1) '("layer")))
+  (should (equal (autolisp-test-complete-in "(command \"LA^\")" 1) '("LAYER")))
+  (should (member "ActiveLayer"
+                  (autolisp-test-complete-in "(vlax-get-property doc 'activel^" 2)))
+  (should (member "AddLine" (autolisp-test-complete-in "(vlax-invoke ms 'addl^" 3)))
+  ;; The second string of COMMAND waits to be asked.
+  (should-not (autolisp-test-complete-in "(command \"_.line\" \"^\")"))
+  (should-not (autolisp-test-complete-in "(princ \"dimsc^\")"))
+  (let ((autolisp-complete-commands-in t))
+    (should (autolisp-test-complete-in "(princ \"dimsc^\")"))))
+
+(ert-deftest autolisp-complete-dcl-names ()
+  (autolisp-test-with-copies
+    (let ((file (concat dir "dialogs.lsp")))
+      (with-temp-file file (insert "(new_dialog \"\" id)\n(action_tile \"cbx\" \"\")\n"))
+      (with-current-buffer (find-file-noselect file)
+        (goto-char 14)
+        (should (equal (autolisp-test-complete) '("ALE_Dialog1" "ALE_Dialog2")))
+        (autolisp-test-goto "cbx") (forward-char 3)
+        (should (member "cbxProj1" (autolisp-test-complete)))))))
+
+(ert-deftest autolisp-complete-through-emacs ()
+  "The styles for the category are used, and nothing rejects a fuzzy match."
+  (autolisp-test-with "(vl-string-tri^ \"x\")"
+    (completion-at-point)
+    (should (looking-back "(vl-string-trim" (pos-bol))))
+  (autolisp-test-with "(strng-trm^"
+    (let ((found (run-hook-wrapped 'completion-at-point-functions
+                                   #'completion--capf-wrapper 'all)))
+      (should (eq (car found) #'autolisp-completion-at-point))
+      (should (member "vl-string-trim"
+                      (completion-all-completions "strng-trm" (nth 3 found) nil 9))))))
+
+(ert-deftest autolisp-complete-annotations ()
+  (autolisp-test-with "(entge^"
+    (let* ((data (autolisp-completion-at-point))
+           (c (car (all-completions "entget" (nth 2 data)))))
+      (should (equal (funcall (plist-get (nthcdr 3 data) :annotation-function) c)
+                     "  ename applist?")))))
 
 (defun autolisp-test-eldoc ()
   (let (out) (autolisp-eldoc-function (lambda (s &rest _) (setq out s))) out))
@@ -217,6 +315,100 @@
       (should (equal (substring-no-properties s) "(f aa bb)"))
       (should (eq (get-text-property (string-search "bb" s) 'face s)
                   'eldoc-highlight-function-argument)))))
+
+;;;; Help at point
+
+(defun autolisp-test-help (text)
+  "Return the text of the help at ^ in TEXT."
+  (autolisp-test-with text
+    (plist-get (autolisp-help--lisp) :text)))
+
+(ert-deftest autolisp-help-built-ins ()
+  (should (string-match-p "\\`(entget" (autolisp-test-help "(ent^get e)")))
+  ;; At either end of the word, and quoted.
+  (should (string-match-p "\\`(entget" (autolisp-test-help "(^entget e)")))
+  (should (string-match-p "\\`(entget" (autolisp-test-help "(entget^ e)")))
+  (should (string-match-p "\\`(strcat" (autolisp-test-help "(mapcar 'str^cat l)")))
+  (should (string-match-p "\\`(strcat" (autolisp-test-help "(STR^CAT l)")))
+  ;; The call around point, where there is nothing better.
+  (should (string-match-p "\\`(strcat" (autolisp-test-help "(strcat \"a\" ^ )")))
+  (should (string-match-p "\\`(getvar" (autolisp-test-help "(getvar \"CMD^ECHO\")")))
+  (should (string-match-p "does not document" (autolisp-test-help "(vl-b^t)")))
+  (should-not (autolisp-test-help "; (ent^get)"))
+  (should-not (autolisp-test-help "^\n")))
+
+(ert-deftest autolisp-help-constants-and-members ()
+  (should (string-match-p "acRed is a value" (autolisp-test-help "(vla-put-color o ac^Red)")))
+  (should (string-match-p "ActiveLayer" (autolisp-test-help
+                                         "(vlax-get-property d 'Active^Layer)")))
+  (should (string-match-p "\\`(vla-put-ActiveLayer"
+                          (autolisp-test-help "(vlax-put-property d \"Active^Layer\" x)"))))
+
+(ert-deftest autolisp-help-user-symbols ()
+  (let ((code ";|\n  Adds things\n  @Param theItem what to add\n|;\n(defun MyAdd (theItem / cnt)\n  (setq cnt 1)\n  (foreach q theItem (princ q))\n)\n(setq total 5)\n"))
+    (let ((help (autolisp-test-help (concat code "(My^Add total)"))))
+      (should (string-match-p "\\`(MyAdd theItem)" help))
+      (should (string-match-p "Adds things" help))
+      (should (string-match-p ":5: (defun MyAdd" help)))
+    (let ((help (autolisp-test-help (concat code "(MyAdd to^tal)"))))
+      (should (string-match-p "total is a global variable" help))
+      (should (string-match-p "(setq total 5)" help)))
+    (let ((help (autolisp-test-help (string-replace "foreach q theItem" "foreach q the^Item" code))))
+      (should (string-match-p "theItem is an argument of MyAdd" help))
+      (should (string-match-p "what to add" help)))
+    (let ((help (autolisp-test-help (string-replace "(setq cnt" "(setq c^nt" code))))
+      (should (string-match-p "cnt is a local variable of MyAdd" help))
+      (should (string-match-p "(setq cnt 1)" help)))
+    (should (string-match-p "lambda, foreach"
+                            (autolisp-test-help (string-replace "(princ q)" "(princ ^q)" code))))))
+
+(ert-deftest autolisp-help-across-files ()
+  (autolisp-test-with-copies
+    (with-current-buffer (find-file-noselect (concat dir "paperspace utilities.lsp"))
+      (autolisp-test-goto "settextstyle")
+      (let ((help (autolisp-help--lisp)))
+        (should (string-match-p "\\`(SetTextStyle sfc:style1)" (plist-get help :text)))
+        (should (string-match-p "Sets the specified text style" (plist-get help :text)))
+        (should (string-suffix-p "standards.lsp" (car (plist-get help :location))))))))
+
+(ert-deftest autolisp-help-dcl ()
+  (dolist (case '((": but^ton { label = \"x\"; }" . "button")
+                  (": button { lab^el = \"x\"; }" . "label")
+                  (": button { label = \"x^\"; }" . "label")
+                  (": button { ^ }" . "button")))
+    (autolisp-test-dcl (concat "d : dialog { " (car case) " }")
+      (should (string-match-p (cdr case) (or (plist-get (autolisp-help--dcl) :text) ""))))))
+
+(ert-deftest autolisp-help-key ()
+  "The help key shows help, and its buttons work."
+  (autolisp-test-with "(ent^get e)"
+    (should (eq (key-binding (kbd "C-h .")) 'autolisp-help-at-point))
+    (save-window-excursion
+      (call-interactively #'autolisp-help-at-point)
+      (with-current-buffer "*Help*"
+        (should (string-match-p "entget" (buffer-string)))
+        (goto-char (point-min))
+        (should (search-forward "Open online help" nil t))
+        (let (opened)
+          (cl-letf (((symbol-function 'browse-url) (lambda (u &rest _) (setq opened u))))
+            (push-button (1- (point))))
+          (should (string-match-p "12540DAE" opened))))))
+  (autolisp-test-dcl "d : dialog { }"
+    (should (eq (command-remapping 'display-local-help) 'autolisp-help-at-point)))
+  ;; Nothing to say: fall back to Emacs's own.
+  (autolisp-test-with "^\n"
+    (let (called)
+      (cl-letf (((symbol-function 'display-local-help)
+                 (lambda (&rest _) (interactive) (setq called t))))
+        (call-interactively #'autolisp-help-at-point))
+      (should called))))
+
+(ert-deftest autolisp-eldoc-is-on ()
+  (let ((global-eldoc-mode nil))
+    (global-eldoc-mode 1)
+    (with-temp-buffer
+      (autolisp-mode)
+      (should eldoc-mode))))
 
 ;;;; Symbols
 
@@ -390,15 +582,6 @@
   (should (eq 'autolisp-dcl-mode (assoc-default "x.dcl" auto-mode-alist #'string-match))))
 
 ;;;; DCL
-
-(defmacro autolisp-test-dcl (text &rest body)
-  (declare (indent 1))
-  `(with-temp-buffer
-     (insert ,text)
-     (autolisp-dcl-mode)
-     (goto-char (point-min))
-     (when (search-forward "^" nil t) (delete-char -1))
-     ,@body))
 
 (defun autolisp-test-dcl-complete ()
   (pcase (autolisp-dcl-completion-at-point)

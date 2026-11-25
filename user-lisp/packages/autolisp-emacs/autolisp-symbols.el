@@ -48,6 +48,7 @@ When nil, only open buffers and the active .prj file are searched."
 (cl-defstruct (autolisp-node (:constructor autolisp-node--make))
   type                        ; atom, string or list
   name                        ; downcased symbol text, for atoms
+  text                        ; the same as written
   beg end
   quoted                      ; preceded by '
   children closed)
@@ -58,6 +59,7 @@ When nil, only open buffers and the active .prj file are searched."
 
 (cl-defstruct (autolisp-ref (:constructor autolisp-ref--make))
   name beg end scope
+  text                        ; the name as written
   kind                        ; nil, defun, setq or local
   head                        ; non-nil in function position
   quoted
@@ -115,9 +117,9 @@ When nil, only open buffers and the active .prj file are searched."
         (autolisp-node--make :type 'string :beg beg :end (point)))
        (t
         (skip-chars-forward "^ \t\n\r\f()\"';")
-        (autolisp-node--make :type 'atom :beg beg :end (point) :quoted quoted
-                             :name (downcase (buffer-substring-no-properties
-                                              beg (point)))))))))
+        (let ((text (buffer-substring-no-properties beg (point))))
+          (autolisp-node--make :type 'atom :beg beg :end (point) :quoted quoted
+                               :name (downcase text) :text text)))))))
 
 (defun autolisp--read-all ()
   "Read every form in the buffer, skipping stray closing parens."
@@ -153,6 +155,7 @@ SCOPE is the innermost scope; the ref gets the one that binds it."
       (while (and s (not (member name (autolisp-scope-names s))))
         (setq s (autolisp-scope-parent s)))
       (let ((ref (apply #'autolisp-ref--make :name name
+                        :text (autolisp-node-text node)
                         :beg (autolisp-node-beg node) :end (autolisp-node-end node)
                         :quoted (autolisp-node-quoted node) :scope s props)))
         (push ref autolisp--refs)
@@ -168,7 +171,7 @@ SCOPE is the innermost scope; the ref gets the one that binds it."
 (defun autolisp--arg-names (header)
   "Return the argument names in HEADER, without the locals."
   (when (and header (eq (autolisp-node-type header) 'list))
-    (mapcar #'autolisp-node-name
+    (mapcar #'autolisp-node-text
             (seq-take-while (lambda (n) (not (equal (autolisp-node-name n) "/")))
                             (autolisp--atoms header)))))
 
@@ -350,7 +353,7 @@ INDEX is the result of `autolisp--comment-index'."
   "File name -> (CHECKED MODTIME . ANALYSIS) for files not being visited.")
 
 (defvar autolisp--listing-cache (make-hash-table :test #'equal)
-  "Directory -> (CHECKED . FILES).")
+  "Where and what to list -> (CHECKED . FILES).")
 
 (defun autolisp-buffer-analysis (&optional buffer)
   "Return the analysis of BUFFER, reusing it while the text is unchanged."
@@ -383,28 +386,28 @@ INDEX is the result of `autolisp--comment-index'."
 
 (defconst autolisp-file-regexp "\\.\\(?:lsp\\|mnl\\)\\'")
 
-(defun autolisp--directory-files ()
-  "Return the AutoLISP files that belong with the current buffer."
-  (let* ((key (cons default-directory autolisp-search-project-root))
+(defun autolisp--nearby-files (regexp)
+  "Return the files matching REGEXP that belong with the current buffer."
+  (let* ((key (list default-directory autolisp-search-project-root regexp))
          (cached (gethash key autolisp--listing-cache))
          (now (float-time)))
     (if (and cached (< (- now (car cached)) autolisp--cache-seconds))
         (cdr cached)
-      (let ((files (seq-filter #'file-readable-p (autolisp--list-directory-files))))
+      (let ((files (seq-filter #'file-readable-p
+                               (autolisp--list-nearby-files regexp))))
         (puthash key (cons now files) autolisp--listing-cache)
         files))))
 
-(defun autolisp--list-directory-files ()
-  "List the AutoLISP files that belong with the current buffer."
+(defun autolisp--list-nearby-files (regexp)
+  "List the files matching REGEXP that belong with the current buffer."
   (let ((case-fold-search t))
     (if-let* ((project (and autolisp-search-project-root
                             buffer-file-name
                             (project-current nil))))
-        (seq-filter (lambda (f) (string-match-p autolisp-file-regexp f))
+        (seq-filter (lambda (f) (string-match-p regexp f))
                     (project-files project))
       (when buffer-file-name
-        (directory-files (file-name-directory buffer-file-name) t
-                         autolisp-file-regexp t)))))
+        (directory-files (file-name-directory buffer-file-name) t regexp t)))))
 
 (defun autolisp-related-files ()
   "Return files to search from the current buffer, without duplicates.
@@ -421,7 +424,7 @@ the project or directory."
          (all (delete-dups
                (mapcar #'expand-file-name
                        (append (and buffer-file-name (list buffer-file-name))
-                               open prj (autolisp--directory-files))))))
+                               open prj (autolisp--nearby-files autolisp-file-regexp))))))
     (seq-take all autolisp-search-file-limit)))
 
 (defun autolisp--map-analyses (function)

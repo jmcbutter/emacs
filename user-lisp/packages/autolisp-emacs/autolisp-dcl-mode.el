@@ -139,7 +139,9 @@
     (when-let* ((candidates (autolisp-dcl--candidates)))
       (list (save-excursion (skip-chars-backward "A-Za-z0-9_") (point))
             (save-excursion (skip-chars-forward "A-Za-z0-9_") (point))
-            (completion-table-case-fold candidates)
+            (autolisp-complete-table candidates
+                                     (save-excursion
+                                       (skip-chars-backward "A-Za-z0-9_") (point)))
             :annotation-function
             (lambda (n) (cond ((autolisp-data-dcl-attribute n) " attribute")
                               ((autolisp-data-dcl-tile n) " tile")))
@@ -177,6 +179,7 @@
 
 (defvar-keymap autolisp-dcl-mode-map
   :doc "Keymap for `autolisp-dcl-mode'."
+  "<remap> <display-local-help>" #'autolisp-help-at-point
   "C-c C-d" #'autolisp-dcl-describe
   "C-c C-w" #'autolisp-dcl-open-web-help
   "C-c C-n" #'autolisp-insert-region
@@ -190,6 +193,7 @@
               comment-end ""
               comment-start-skip "\\(?://+\\|/\\*+\\)[ \t]*"
               indent-tabs-mode nil
+              completion-ignore-case t
               indent-line-function #'autolisp-dcl-indent-line
               imenu-generic-expression
               '((nil "^\\s-*\\([A-Za-z_][A-Za-z_0-9]*\\)\\s-*:\\s-*dialog\\_>" 1))

@@ -31,18 +31,12 @@
 
 (require 'autolisp-data)
 (require 'autolisp-symbols)
+(require 'autolisp-complete)
+(require 'autolisp-help)
 
 (defcustom autolisp-indent-offset 2
   "Columns to indent the body of a form."
   :type 'integer
-  :group 'autolisp)
-
-(defcustom autolisp-complete-commands-in
-  '("command" "command-s" "vl-cmdf" "getvar" "setvar" "getcname"
-    "vla-sendcommand" "vla-postcommand" "vla-getvariable" "vla-setvariable")
-  "Functions whose string arguments complete command and variable names.
-If t, complete them in every string, as AutoLispExt does."
-  :type '(choice (const :tag "Every string" t) (repeat string))
   :group 'autolisp)
 
 ;;;; Syntax
@@ -218,16 +212,7 @@ INDEX is the zero-based argument point is in, or nil on the operator."
                            (1- n))
                           (t n))))))))))
 
-;;;; Completion
-
-(defvar autolisp--upcased (make-hash-table :test #'eq))
-
-(defun autolisp--match-case (names prefix)
-  "Return NAMES in upper case if PREFIX ends in an upper-case letter."
-  (let ((c (and (> (length prefix) 0) (aref prefix (1- (length prefix))))))
-    (if (and c (/= c (downcase c)))
-        (mapcar #'upcase names)
-      names)))
+;;;; Documentation
 
 (defun autolisp--doc-string (name)
   "Return help text for symbol NAME, or nil."
@@ -253,10 +238,6 @@ INDEX is the zero-based argument point is in, or nil on the operator."
       (goto-char (point-min))
       (current-buffer))))
 
-(defun autolisp--annotation (name)
-  "Return a short annotation for completion candidate NAME."
-  (if (autolisp-data-native-p name) " built-in" " user"))
-
 (defun autolisp--short-signature (name)
   "Return a one-line signature for NAME, or nil."
   (if-let* ((e (car (autolisp-data-function-help name))))
@@ -264,75 +245,11 @@ INDEX is the zero-based argument point is in, or nil on the operator."
     (when-let* ((ref (cdar (autolisp-find-defuns name))))
       (autolisp--defun-signature ref))))
 
-(defun autolisp--complete-string (state)
-  "Complete a command or system variable in the string of STATE."
-  (let ((call (autolisp--call-at-point)))
-    (when (or (eq autolisp-complete-commands-in t)
-              (member (downcase (or (car call) "")) autolisp-complete-commands-in))
-      (let ((end (point))
-            ;; _ asks for the English name and . for the original command.
-            (beg (save-excursion
-                   (skip-chars-backward "A-Za-z0-9-" (1+ (nth 8 state))) (point))))
-        (when (save-excursion
-                (goto-char beg)
-                (skip-chars-backward "._'" (1+ (nth 8 state)))
-                (or (= (point) (1+ (nth 8 state)))
-                    (memq (char-before) '(?\s ?\n))))
-          (let* ((prefix (buffer-substring-no-properties beg end))
-                 (names (autolisp-data-commands))
-                 (c (and (not (string-empty-p prefix))
-                         (aref prefix (1- (length prefix))))))
-            (list beg
-                  (save-excursion (skip-chars-forward "A-Za-z0-9-") (point))
-                  (completion-table-case-fold
-                   (if (and c (= c (downcase c)) (/= c (upcase c)))
-                       (mapcar #'downcase names)
-                     names))
-                  :annotation-function (lambda (_) " command/sysvar")
-                  :exclusive 'no)))))))
-
-(defun autolisp-completion-at-point ()
-  "Complete the AutoLISP symbol, command or variable at point."
-  (let ((state (syntax-ppss)))
-    (cond
-     ((nth 3 state) (autolisp--complete-string state))
-     ((nth 4 state) nil)
-     (t
-      (let* ((end (point))
-             (beg (save-excursion (skip-syntax-backward "w_") (point)))
-             (prefix (buffer-substring-no-properties beg end)))
-        (when (< beg end)
-          (list beg (save-excursion (skip-syntax-forward "w_") (point))
-                (completion-table-case-fold
-                 (completion-table-dynamic
-                  (lambda (_)
-                    (autolisp--match-case
-                     (delete-dups
-                      (append (autolisp--buffer-symbols beg)
-                              (autolisp-all-defun-names)
-                              (autolisp-data-functions)))
-                     prefix))
-                  t))
-                :annotation-function #'autolisp--annotation
-                :company-docsig #'autolisp--short-signature
-                :company-doc-buffer #'autolisp--doc-buffer
-                :exclusive 'no)))))))
-
-(defun autolisp--buffer-symbols (except)
-  "Return the user symbols in this buffer, apart from one only at EXCEPT."
-  (let (out)
-    (maphash (lambda (name refs)
-               (unless (and (null (cdr refs))
-                            (= (autolisp-ref-beg (car refs)) except))
-                 (push name out)))
-             (autolisp-analysis-table (autolisp-buffer-analysis)))
-    out))
-
 ;;;; Eldoc and help
 
 (defun autolisp--defun-signature (ref)
   "Return the signature of the defun REF."
-  (format "(%s)" (string-join (cons (autolisp-ref-name ref) (autolisp-ref-args ref))
+  (format "(%s)" (string-join (cons (autolisp-ref-text ref) (autolisp-ref-args ref))
                               " ")))
 
 (defun autolisp--highlight-argument (signature index)
@@ -490,6 +407,7 @@ INDEX is the zero-based argument point is in, or nil on the operator."
 
 (defvar-keymap autolisp-mode-map
   :doc "Keymap for `autolisp-mode'."
+  "<remap> <display-local-help>" #'autolisp-help-at-point
   "C-c C-d" #'autolisp-describe-symbol
   "C-c C-w" #'autolisp-open-web-help
   "C-c C-r" #'autolisp-rename-symbol
@@ -533,6 +451,7 @@ INDEX is the zero-based argument point is in, or nil on the operator."
               tab-width 2
               indent-line-function #'autolisp-indent-line
               case-fold-search t
+              completion-ignore-case t
               imenu-case-fold-search t
               imenu-generic-expression autolisp-imenu-generic-expression
               syntax-propertize-function #'autolisp-syntax-propertize
