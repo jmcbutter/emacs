@@ -32,7 +32,10 @@
 (use-package emacs
   :config
   (load-theme 'modus-operandi-tinted)
-  (set-frame-font "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-16-*-*-*-m-0-iso10646-1")
+  ;; Windows registers the same font under its short family name.
+  (set-frame-font (if (eq system-type 'windows-nt)
+                      "-*-JetBrainsMono NF-regular-normal-normal-*-16-*-*-*-*-0-iso10646-1"
+                    "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-16-*-*-*-m-0-iso10646-1"))
   (custom-set-faces '(variable-pitch ((t (:family "GoMono Nerd Font")))))
   (add-hook 'org-mode-hook 'variable-pitch-mode)
   (add-hook 'markdown-mode-hook 'variable-pitch-mode))
@@ -44,6 +47,7 @@
   ("M-o" . #'other-window))
 ;; Shell Vars
 (use-package exec-path-from-shell
+  :unless (eq system-type 'windows-nt)
   :ensure t
   :hook (after-init . exec-path-from-shell-initialize))
 
@@ -214,6 +218,7 @@ installed."
    "pandoc -f markdown -t org --wrap=preserve" t t))
 
 (use-package xclip
+  :unless (eq system-type 'windows-nt)
   :ensure t
   :demand t
   :config
@@ -233,19 +238,25 @@ installed."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Light/Dark Mode
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(require 'dbus)
+(unless (eq system-type 'windows-nt)
+  (require 'dbus))
 
 (defvar my-light-theme 'modus-operandi-tinted)
 (defvar my-dark-theme 'modus-vivendi)
 
 (defun my-system-dark-p ()
-  (string-match-p
-   "prefer-dark"
-   (car (process-lines
-         "gsettings"
-         "get"
-         "org.gnome.desktop.interface"
-         "color-scheme"))))
+  (if (eq system-type 'windows-nt)
+      (eql 0 (w32-read-registry
+              'HKCU
+              "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+              "AppsUseLightTheme"))
+    (string-match-p
+     "prefer-dark"
+     (car (process-lines
+           "gsettings"
+           "get"
+           "org.gnome.desktop.interface"
+           "color-scheme")))))
 
 (defun my-apply-system-theme (&rest _)
   (mapc #'disable-theme custom-enabled-themes)
@@ -258,17 +269,19 @@ installed."
 ;; Apply current theme at startup.
 (my-apply-system-theme)
 
-;; React to changes from the desktop portal.
-(dbus-register-signal
- :session
- nil
- "/org/freedesktop/portal/desktop"
- "org.freedesktop.portal.Settings"
- "SettingChanged"
- (lambda (namespace key _value)
-   (when (and (equal namespace "org.freedesktop.appearance")
-              (equal key "color-scheme"))
-     (my-apply-system-theme))))
+;; React to changes from Windows, or from the desktop portal.
+(if (eq system-type 'windows-nt)
+    (add-hook 'toolkit-theme-set-functions #'my-apply-system-theme)
+  (dbus-register-signal
+   :session
+   nil
+   "/org/freedesktop/portal/desktop"
+   "org.freedesktop.portal.Settings"
+   "SettingChanged"
+   (lambda (namespace key _value)
+     (when (and (equal namespace "org.freedesktop.appearance")
+                (equal key "color-scheme"))
+       (my-apply-system-theme)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; User Lisp

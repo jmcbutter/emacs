@@ -54,6 +54,10 @@
 
 
 (add-to-list 'user-lisp-ignored-directories "test")
+;; Load these from source: use-package only installs missing packages
+;; when its forms aren't byte-compiled.
+(add-to-list 'user-lisp-ignored-directories "config")
+(add-to-list 'user-lisp-ignored-directories "lang")
 
 
 (prefer-coding-system 'utf-8)

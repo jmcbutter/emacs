@@ -3,6 +3,8 @@
 ;;; Code:
 
 (use-package pdf-tools
+  ;; Its epdfinfo program isn't available on Windows without MSYS2.
+  :unless (eq system-type 'windows-nt)
   :ensure t
   :demand t
   :custom

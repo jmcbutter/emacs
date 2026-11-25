@@ -50,18 +50,17 @@
  '(org-agenda-files nil)
  '(org-directory "~/Dropbox/Documents/")
  '(package-selected-packages
-   '(agent-shell-knockknock agent-shell-sidebar apptrack bbdb bufferlo
-                            calibredb clipetty codex-ide corfu
-                            diminish dired-preview dockerfile-mode
-                            doom-themes eat eaveside-agent-manager eca
-                            eglot-java exec-path-from-shell
-                            feature-mode forge ghostel gptel lsp-mode
-                            marginalia md-ts-mode
-                            nerd-icons-completion nerd-icons-dired
-                            nerd-icons-ibuffer nov org-edna pdf-tools
-                            plantuml-mode rainbow-delimiters sqlite3
-                            texfrag undo-fu-session vertico
-                            vundo web-mode ws-butler xclip))
+   '(agent-shell agent-shell-knockknock agent-shell-sidebar apptrack bbdb
+                 bufferlo calibredb clipetty codex-ide corfu diminish
+                 dired-preview dockerfile-mode doom-themes eat
+                 eaveside-agent-manager eca eglot-java
+                 exec-path-from-shell feature-mode forge ghostel gptel
+                 lsp-mode magit marginalia md-ts-mode
+                 nerd-icons-completion nerd-icons-dired
+                 nerd-icons-ibuffer nov org-edna pdf-tools
+                 plantuml-mode rainbow-delimiters sqlite3 texfrag
+                 undo-fu-session vertico vundo web-mode ws-butler
+                 xclip))
  '(package-vc-selected-packages
    '((eaveside-agent-manager :url
                              "git@github.com:jmcbutter/eaveside-agentic-workflow.git"
